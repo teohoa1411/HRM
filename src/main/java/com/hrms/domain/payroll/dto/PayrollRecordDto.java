@@ -1,0 +1,41 @@
+package com.hrms.domain.payroll.dto;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+
+public record PayrollRecordDto(
+        Long id,
+        Long employeeId,
+        String employeeCode,
+        String fullName,
+        String departmentName,
+        String jobRoleName,
+        String payrollMonth,
+        BigDecimal baseSalary,
+        BigDecimal daysWorked,
+        BigDecimal daysOff,
+        BigDecimal totalWorkdays,
+        BigDecimal calculatedSalary,
+        BigDecimal bonus,
+        BigDecimal deduction,
+        BigDecimal insuranceSalary,
+        BigDecimal insuranceEmployeeAmount,
+        BigDecimal insuranceEmployerAmount,
+        BigDecimal bhxhEmployeeAmount,
+        BigDecimal bhxhEmployerAmount,
+        BigDecimal bhytEmployeeAmount,
+        BigDecimal bhytEmployerAmount,
+        BigDecimal bhtnEmployeeAmount,
+        BigDecimal bhtnEmployerAmount,
+        String adjustmentNote,
+        List<PayrollAdjustmentDto> adjustments,
+        BigDecimal netSalary,
+        String currency,
+        String status,
+        Long confirmedBy,
+        LocalDateTime confirmedAt,
+        LocalDateTime exportedAt,
+        Long paidBy,
+        LocalDateTime paidAt
+) {}

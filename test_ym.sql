@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS test_ym_table (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `year_month` VARCHAR(7) NOT NULL,
+    PRIMARY KEY (id)
+) ENGINE = InnoDB;
+DROP TABLE IF EXISTS test_ym_table;

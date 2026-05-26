@@ -1,0 +1,38 @@
+# Build output
+build/
+out/
+target/
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Compiled boot artifacts
+BOOT-INF/
+
+# Secrets / env
+.env
+*.env.local
+application-local.yml
+application-prod.yml
+
+# Compiled class files
+*.class

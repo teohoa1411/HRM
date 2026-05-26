@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- ── Properties ───────────────────────────────────────────────────── -->
+    <springProperty name="APP_NAME"  source="spring.application.name"  defaultValue="hrms-backend"/>
+    <springProperty name="LOG_LEVEL_APP" source="logging.level.com.hrms" defaultValue="INFO"/>
+    <springProperty name="LOG_LEVEL_SQL" source="logging.level.org.hibernate.SQL" defaultValue="WARN"/>
+    <!-- LOKI_URL từ env var LOKI_URL (docker-compose inject), fallback localhost -->
+    <property name="LOKI_URL" value="${LOKI_URL:-http://localhost:3100}"/>
+
+    <!-- ── Console Appender ─────────────────────────────────────────────── -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ── Rolling File Appender (backup khi Loki down) ────────────────── -->
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>/app/logs/hrms-backend.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>/app/logs/hrms-backend.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>2GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ── Loki Appender (push log lên Loki realtime) ───────────────────── -->
+    <!-- Chỉ active khi Spring profile = "docker" (inject từ docker-compose) -->
+    <springProfile name="docker">
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <batchMaxItems>1000</batchMaxItems>
+            <batchMaxBytes>4194304</batchMaxBytes>  <!-- 4MB -->
+            <batchTimeoutMs>5000</batchTimeoutMs>
+
+            <http class="com.github.loki4j.logback.JavaHttpSender">
+                <url>${LOKI_URL}/loki/api/v1/push</url>
+                <connectionTimeoutMs>5000</connectionTimeoutMs>
+                <requestTimeoutMs>10000</requestTimeoutMs>
+            </http>
+
+            <format>
+                <label>
+                    <pattern>app=${APP_NAME},host=${HOSTNAME:-localhost},level=%level,logger=%logger{20}</pattern>
+                    <readMarkers>true</readMarkers>
+                </label>
+                <message class="com.github.loki4j.logback.JsonLayout">
+                    <appendLineSeparator>true</appendLineSeparator>
+                </message>
+                <sortByTime>true</sortByTime>
+            </format>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="LOKI"/>
+        </root>
+    </springProfile>
+
+    <!-- ── Default (local dev): chỉ console, không Loki ───────────────── -->
+    <springProfile name="!docker">
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+    <!-- ── Logger levels — đọc từ application.yml / ENV, không hardcode ── -->
+    <logger name="com.hrms" level="${LOG_LEVEL_APP}" additivity="false">
+        <springProfile name="docker">
+            <appender-ref ref="CONSOLE"/>
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="LOKI"/>
+        </springProfile>
+        <springProfile name="!docker">
+            <appender-ref ref="CONSOLE"/>
+        </springProfile>
+    </logger>
+
+    <!-- Prod: WARN để tránh log SQL + bind params chứa dữ liệu nhạy cảm -->
+    <logger name="org.springframework.security"  level="WARN"/>
+    <logger name="org.hibernate.SQL"             level="${LOG_LEVEL_SQL}"/>
+    <logger name="org.hibernate.orm.jdbc.bind"   level="WARN"/>
+
+    <!-- Tắt noise từ Loki4j chính nó -->
+    <logger name="com.github.loki4j" level="WARN"/>
+
+</configuration>
