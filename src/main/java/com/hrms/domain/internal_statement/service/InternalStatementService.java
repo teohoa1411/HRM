@@ -1,6 +1,8 @@
 package com.hrms.domain.internal_statement.service;
 
 import com.hrms.domain.common.exception.BusinessException;
+import com.hrms.domain.common.enums.EmployeeSourceType;
+import com.hrms.domain.calendar.service.WorkCalendarService;
 import com.hrms.domain.employee.entity.Employee;
 import com.hrms.domain.employee.repository.EmployeeRepository;
 import com.hrms.domain.internal_statement.dto.*;
@@ -16,6 +18,7 @@ import com.hrms.domain.timesheet.entity.Timesheet;
 import com.hrms.domain.timesheet.entity.TimesheetPeriodLock;
 import com.hrms.domain.timesheet.repository.TimesheetRepository;
 import com.hrms.domain.timesheet.repository.TimesheetPeriodLockRepository;
+import com.hrms.domain.payroll.repository.PayrollRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
@@ -54,12 +57,33 @@ public class InternalStatementService {
     private final LeaveRequestRepository leaveRequestRepo;
     private final LeaveTypeRepository leaveTypeRepo;
     private final TimesheetPeriodLockRepository timesheetPeriodLockRepository;
+    private final WorkCalendarService workCalendarService;
+    private final PayrollRecordRepository payrollRecordRepository;
 
     // ─────────────────────────────────────────────────────────────
     // 1. Generate / Refresh toàn bộ nhân sự trong tháng
     // ─────────────────────────────────────────────────────────────
     // Bug 4: Lock đơn giản để tránh 2 admin generate cùng lúc
     private final Set<String> generatingLocks = Collections.synchronizedSet(new HashSet<>());
+
+    /**
+     * Biên bản nội bộ là đầu vào của bảng lương, nên chỉ được tổng hợp khi
+     * Timesheet đã bị khóa và được Kế toán xác nhận chốt số liệu.
+     */
+    private void assertTimesheetAccountantConfirmed(Long companyId, String yearMonth) {
+        TimesheetPeriodLock lock = timesheetPeriodLockRepository
+                .findByCompanyIdAndYearMonth(companyId, yearMonth)
+                .orElseThrow(() -> new BusinessException(
+                        "Timesheet tháng " + yearMonth
+                                + " chưa được khóa và Kế toán xác nhận. Vui lòng hoàn tất bước xác nhận timesheet trước khi tạo biên bản nội bộ.",
+                        HttpStatus.BAD_REQUEST, "TIMESHEET_NOT_ACCOUNTANT_CONFIRMED"));
+        if (!lock.isLocked() || !lock.isAccountantConfirmed()) {
+            throw new BusinessException(
+                    "Timesheet tháng " + yearMonth
+                            + " chưa được Kế toán xác nhận. Vui lòng xác nhận timesheet trước khi tạo biên bản nội bộ.",
+                    HttpStatus.BAD_REQUEST, "TIMESHEET_NOT_ACCOUNTANT_CONFIRMED");
+        }
+    }
 
     @Transactional
     public void generateForMonth(Long companyId, String yearMonth) {
@@ -71,6 +95,8 @@ public class InternalStatementService {
             throw new BusinessException("Tháng không hợp lệ: " + yearMonth + ". Định dạng: YYYY-MM",
                     HttpStatus.BAD_REQUEST, "INVALID_MONTH");
         }
+
+        assertTimesheetAccountantConfirmed(companyId, yearMonth);
 
         // Bug 4: Chống race condition — chỉ 1 request generate cùng lúc cho 1 company+month
         String lockKey = companyId + ":" + yearMonth;
@@ -89,12 +115,12 @@ public class InternalStatementService {
         // Bug 2: Chặn generate khi statement đã CONFIRMED/CLOSED
         List<InternalStatementSummary> existingSummaries = summaryRepo
                 .findByCompanyIdAndYearMonth(companyId, yearMonth);
-        boolean hasClosed = existingSummaries.stream()
-                .anyMatch(s -> "CLOSED".equals(s.getStatus()));
-        if (hasClosed) {
+        boolean hasFinalized = existingSummaries.stream()
+                .anyMatch(s -> !"DRAFT".equals(s.getStatus()));
+        if (hasFinalized) {
             throw new BusinessException(
                     "Tháng " + yearMonth + " đã CLOSED. Không thể tổng hợp lại.",
-                    HttpStatus.CONFLICT, "STATEMENT_CLOSED");
+                    HttpStatus.CONFLICT, "STATEMENT_FINALIZED");
         }
 
         LocalDate monthStart = ym.atDay(1);
@@ -105,15 +131,13 @@ public class InternalStatementService {
                 .stream().collect(Collectors.toMap(LeaveType::getId, lt -> lt));
 
         // Bug 1: Chỉ lấy APPROVED leaves (không lấy PENDING)
-        List<Employee> relevantEmployees = allEmployees.stream().filter(emp -> {
-            if (emp.getUserId() != null) {
-                List<Timesheet> ts = timesheetRepo.findByUserAndMonth(emp.getUserId(), companyId, monthStart, monthEnd);
-                if (!ts.isEmpty()) return true;
-            }
-            List<LeaveRequest> leaves = leaveRequestRepo.findOnlyApprovedByEmployeeAndDateRange(
-                    companyId, emp.getId(), monthStart, monthEnd);
-            return !leaves.isEmpty();
-        }).toList();
+        // Payroll phải bao phủ cả nhân sự nội bộ không log giờ: 0h là nghỉ không lương
+        // nếu không có phép hưởng lương hoặc điều chỉnh được xác nhận.
+        List<Employee> relevantEmployees = allEmployees.stream()
+                .filter(emp -> emp.getSourceType() == EmployeeSourceType.INTERNAL)
+                .filter(emp -> !emp.getStartDate().isAfter(monthEnd))
+                .filter(emp -> emp.getEndDate() == null || !emp.getEndDate().isBefore(monthStart))
+                .toList();
 
         // Collect IDs of employees that SHOULD have data
         Set<Long> relevantEmpIds = relevantEmployees.stream()
@@ -140,6 +164,10 @@ public class InternalStatementService {
 
     @Transactional
     public void generateForEmployee(Long companyId, Long employeeId, String yearMonth) {
+        assertTimesheetAccountantConfirmed(companyId, yearMonth);
+        if (isConfirmed(companyId, employeeId, yearMonth)) {
+            throw new BusinessException("Biên bản đã xác nhận; hãy mở lại trước khi tổng hợp", HttpStatus.CONFLICT, "STATEMENT_CONFIRMED");
+        }
         Employee emp = employeeRepo.findByIdAndCompanyIdAndDeletedAtIsNull(employeeId, companyId)
                 .orElseThrow(() -> new BusinessException("Employee not found", HttpStatus.NOT_FOUND, "NOT_FOUND"));
         Map<Long, LeaveType> leaveTypeMap = leaveTypeRepo.findByCompanyId(companyId)
@@ -156,10 +184,13 @@ public class InternalStatementService {
         // Lấy timesheet (nếu employee có userId)
         Map<LocalDate, BigDecimal> rawHoursMap = new HashMap<>();
         Map<LocalDate, String> timesheetNoteMap = new HashMap<>();
+        Map<LocalDate, BigDecimal> rawOtHoursMap = new HashMap<>();
         if (emp.getUserId() != null) {
             List<Timesheet> entries = timesheetRepo.findByUserAndMonth(emp.getUserId(), companyId, monthStart, monthEnd);
             for (Timesheet t : entries) {
                 rawHoursMap.merge(t.getWorkDate(), t.getHours(), BigDecimal::add);
+                rawOtHoursMap.merge(t.getWorkDate(),
+                        t.getOtHours() != null ? t.getOtHours() : BigDecimal.ZERO, BigDecimal::add);
                 if (t.getNote() != null && !t.getNote().isBlank()) {
                     timesheetNoteMap.put(t.getWorkDate(), t.getNote());
                 }
@@ -185,6 +216,10 @@ public class InternalStatementService {
         Set<LocalDate> activeDates = new HashSet<>();
         activeDates.addAll(rawHoursMap.keySet());
         activeDates.addAll(dateLeaveMap.keySet());
+        activeDates.addAll(rawOtHoursMap.keySet());
+        LocalDate activeStart = emp.getStartDate().isAfter(monthStart) ? emp.getStartDate() : monthStart;
+        LocalDate activeEnd = emp.getEndDate() != null && emp.getEndDate().isBefore(monthEnd) ? emp.getEndDate() : monthEnd;
+        for (LocalDate day = activeStart; !day.isAfter(activeEnd); day = day.plusDays(1)) activeDates.add(day);
 
         // Giữ lại những entry đã HR override thủ công (không reset adjustedHours)
         Map<LocalDate, InternalStatementEntry> existingMap = entryRepo
@@ -197,6 +232,8 @@ public class InternalStatementService {
         // 1. Duyệt activeDates: tạo mới hoặc cập nhật entry
         for (LocalDate date : activeDates) {
             BigDecimal raw = rawHoursMap.getOrDefault(date, BigDecimal.ZERO);
+            BigDecimal rawOt = rawOtHoursMap.getOrDefault(date, BigDecimal.ZERO);
+            BigDecimal expected = workCalendarService.isWorkday(companyId, date) ? STD_HOURS : BigDecimal.ZERO;
             LeaveRequest lr = dateLeaveMap.get(date);
             LeaveType lt = lr != null ? leaveTypeMap.get(lr.getLeaveTypeId()) : null;
             boolean isPaid = lt != null && lt.isPaid();
@@ -226,8 +263,12 @@ public class InternalStatementService {
                         .employeeId(emp.getId())
                         .yearMonth(yearMonth)
                         .workDate(date)
+                        .expectedHours(expected)
                         .rawHours(raw)
+                        .rawOtHours(rawOt)
                         .adjustedHours(adjusted)
+                        .adjustedOtHours(rawOt)
+                        .otMultiplier(BigDecimal.valueOf(1.5))
                         .leaveDay(isLeave && !isHalf)
                         .halfLeave(isHalf)
                         .paidLeave(isPaid)
@@ -236,7 +277,13 @@ public class InternalStatementService {
             } else {
                 // Entry đã tồn tại: cập nhật raw, leave info VÀ tính lại adjustedHours
                 entry.setRawHours(raw);
-                entry.setAdjustedHours(adjusted);
+                entry.setRawOtHours(rawOt);
+                entry.setExpectedHours(expected);
+                // DRAFT có thể refresh từ nguồn; CONFIRMED là snapshot bất biến.
+                if (!isConfirmed(companyId, emp.getId(), yearMonth)) {
+                    entry.setAdjustedHours(adjusted);
+                    entry.setAdjustedOtHours(rawOt);
+                }
                 entry.setLeaveDay(isLeave && !isHalf);
                 entry.setHalfLeave(isHalf);
                 entry.setPaidLeave(isPaid);
@@ -269,7 +316,7 @@ public class InternalStatementService {
         // Kiểm tra biên bản đã đóng
         summaryRepo.findByCompanyIdAndEmployeeIdAndYearMonth(companyId, employeeId, yearMonthStr)
                 .ifPresent(s -> {
-                    if ("CLOSED".equals(s.getStatus())) {
+                    if (!"DRAFT".equals(s.getStatus())) {
                         throw new BusinessException(
                                 "Biên bản nội bộ tháng " + yearMonthStr + " đã đóng. Không thể chỉnh sửa.",
                                 HttpStatus.FORBIDDEN, "STATEMENT_CLOSED");
@@ -285,10 +332,28 @@ public class InternalStatementService {
                         .yearMonth(yearMonthStr)
                         .workDate(workDate)
                         .rawHours(BigDecimal.ZERO)
+                        .rawOtHours(BigDecimal.ZERO)
                         .adjustedHours(BigDecimal.ZERO)
+                        .adjustedOtHours(BigDecimal.ZERO)
+                        .otMultiplier(BigDecimal.valueOf(1.5))
                         .build());
 
-        entry.setAdjustedHours(req.adjustedHours() != null ? req.adjustedHours() : BigDecimal.ZERO);
+        BigDecimal adjustedHours = req.adjustedHours() != null ? req.adjustedHours() : BigDecimal.ZERO;
+        BigDecimal adjustedOtHours = req.adjustedOtHours() != null ? req.adjustedOtHours() : BigDecimal.ZERO;
+        BigDecimal multiplier = req.otMultiplier() != null ? req.otMultiplier() : BigDecimal.valueOf(1.5);
+        if (adjustedHours.signum() < 0 || adjustedHours.compareTo(BigDecimal.valueOf(24)) > 0
+                || adjustedOtHours.signum() < 0 || adjustedOtHours.compareTo(BigDecimal.valueOf(24)) > 0
+                || multiplier.compareTo(BigDecimal.ZERO) <= 0 || multiplier.compareTo(BigDecimal.valueOf(5)) > 0) {
+            throw new BusinessException("Giờ công/OT hoặc hệ số OT không hợp lệ", HttpStatus.BAD_REQUEST, "INVALID_HOURS");
+        }
+        if (multiplier.compareTo(BigDecimal.valueOf(1.5)) != 0
+                && (req.otAdjustmentReason() == null || req.otAdjustmentReason().isBlank())) {
+            throw new BusinessException("Cần nêu lý do khi đổi hệ số OT", HttpStatus.BAD_REQUEST, "OT_REASON_REQUIRED");
+        }
+        entry.setAdjustedHours(adjustedHours);
+        entry.setAdjustedOtHours(adjustedOtHours);
+        entry.setOtMultiplier(multiplier);
+        entry.setOtAdjustmentReason(req.otAdjustmentReason());
         entry.setNote(req.note());
         entry.setUpdatedBy(userId);
         entry = entryRepo.save(entry);
@@ -307,12 +372,7 @@ public class InternalStatementService {
         // Chỉ lấy NV có summary VÀ có giờ > 0 hoặc có phép trong tháng
         Map<Long, InternalStatementSummary> summaryMap = summaryRepo
                 .findByCompanyIdAndYearMonth(companyId, yearMonth)
-                .stream()
-                .filter(s -> s.getTotalRawHours().compareTo(BigDecimal.ZERO) > 0
-                        || s.getTotalAdjustedHours().compareTo(BigDecimal.ZERO) > 0
-                        || s.getTotalLeaveDays() > 0
-                        || s.getTotalHalfLeaveDays() > 0)
-                .collect(Collectors.toMap(InternalStatementSummary::getEmployeeId, s -> s));
+                .stream().collect(Collectors.toMap(InternalStatementSummary::getEmployeeId, s -> s));
 
         if (summaryMap.isEmpty()) return List.of();
 
@@ -324,8 +384,8 @@ public class InternalStatementService {
                     Employee emp = empMap.get(entry.getKey());
                     if (emp == null) return null;
                     InternalStatementSummary s = entry.getValue();
-                    return new InternalOverviewItemDto(emp.getId(), emp.getEmployeeCode(), emp.getFullName(),
-                            s.getTotalRawHours(), s.getTotalAdjustedHours(), s.getTotalAdjustedDays(),
+                    return new InternalOverviewItemDto(emp.getId(), emp.getPublicId(), emp.getEmployeeCode(), emp.getFullName(),
+                            s.getTotalRawHours(), s.getTotalAdjustedHours(), s.getTotalAdjustedOtHours(), s.getTotalAdjustedDays(),
                             s.getTotalLeaveDays(), s.getTotalHalfLeaveDays(), s.getStatus());
                 })
                 .filter(Objects::nonNull)
@@ -370,7 +430,8 @@ public class InternalStatementService {
                 DayOfWeek dow = cur.getDayOfWeek();
                 boolean isWeekend = dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY;
                 days.add(new InternalCalendarDayDto(cur, dow.name().substring(0, 3),
-                        isWeekend, BigDecimal.ZERO, BigDecimal.ZERO,
+                        isWeekend, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                        BigDecimal.valueOf(1.5), null,
                         false, false, false, null, tsNote, null, null));
             }
             cur = cur.plusDays(1);
@@ -380,15 +441,19 @@ public class InternalStatementService {
                 .findByCompanyIdAndEmployeeIdAndYearMonth(companyId, employeeId, yearMonth)
                 .orElse(null);
 
+        BigDecimal totalExpected = summary != null ? summary.getTotalExpectedHours() : BigDecimal.ZERO;
         BigDecimal totalRaw = summary != null ? summary.getTotalRawHours() : BigDecimal.ZERO;
         BigDecimal totalAdj = summary != null ? summary.getTotalAdjustedHours() : BigDecimal.ZERO;
+        BigDecimal totalRawOt = summary != null ? summary.getTotalRawOtHours() : BigDecimal.ZERO;
+        BigDecimal totalAdjustedOt = summary != null ? summary.getTotalAdjustedOtHours() : BigDecimal.ZERO;
         BigDecimal totalDays = summary != null ? summary.getTotalAdjustedDays() : BigDecimal.ZERO;
         int leaveDays = summary != null ? summary.getTotalLeaveDays() : 0;
         int halfLeaveDays = summary != null ? summary.getTotalHalfLeaveDays() : 0;
         String status = summary != null ? summary.getStatus() : "NO_DATA";
 
-        return new InternalEmployeeCalendarDto(employeeId, emp.getEmployeeCode(), emp.getFullName(),
-                yearMonth, days, totalRaw, totalAdj, totalDays, leaveDays, halfLeaveDays, status);
+        return new InternalEmployeeCalendarDto(employeeId, emp.getPublicId(), emp.getEmployeeCode(), emp.getFullName(),
+                yearMonth, days, totalExpected, totalRaw, totalAdj, totalRawOt, totalAdjustedOt, totalDays, leaveDays, halfLeaveDays,
+                summary != null ? summary.getRevision() : 0L, status);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -442,12 +507,32 @@ public class InternalStatementService {
                     s.setConfirmedBy(null);
                     s.setConfirmedAt(null);
                     summaryRepo.save(s);
+                    markPayrollStale(companyId, employeeId, yearMonth);
                 });
     }
 
     // ─────────────────────────────────────────────────────────────
     // 6. Lấy adjusted_days của employee cho billing (nếu CONFIRMED)
     // ─────────────────────────────────────────────────────────────
+    @Transactional
+    public void reopenEmployee(Long companyId, Long employeeId, String yearMonth, String reason) {
+        if (reason == null || reason.isBlank()) {
+            throw new BusinessException("Phải nhập lý do mở lại Biên bản", HttpStatus.BAD_REQUEST, "REOPEN_REASON_REQUIRED");
+        }
+        InternalStatementSummary summary = summaryRepo
+                .findByCompanyIdAndEmployeeIdAndYearMonth(companyId, employeeId, yearMonth)
+                .orElseThrow(() -> new BusinessException("Không tìm thấy Biên bản nội bộ", HttpStatus.NOT_FOUND, "NOT_FOUND"));
+        if (!"CONFIRMED".equals(summary.getStatus())) {
+            throw new BusinessException("Chỉ có thể mở lại Biên bản đã xác nhận", HttpStatus.CONFLICT, "INVALID_STATUS");
+        }
+        markPayrollStale(companyId, employeeId, yearMonth);
+        summary.setStatus("DRAFT");
+        summary.setConfirmedBy(null);
+        summary.setConfirmedAt(null);
+        summary.setRevision(summary.getRevision() + 1);
+        summaryRepo.save(summary);
+    }
+
     @Transactional(readOnly = true)
     public Optional<BigDecimal> getConfirmedAdjustedDays(Long companyId, Long employeeId, String yearMonth) {
         return summaryRepo.findByCompanyIdAndEmployeeIdAndYearMonth(companyId, employeeId, yearMonth)
@@ -509,7 +594,7 @@ public class InternalStatementService {
         // Bug 2: Không recalculate khi summary đã CLOSED
         Optional<InternalStatementSummary> existing = summaryRepo
                 .findByCompanyIdAndEmployeeIdAndYearMonth(companyId, employeeId, yearMonth);
-        if (existing.isPresent() && "CLOSED".equals(existing.get().getStatus())) {
+        if (existing.isPresent() && !"DRAFT".equals(existing.get().getStatus())) {
             log.warn("Skipped recalculateSummary: statement CLOSED for employee={}, month={}",
                     employeeId, yearMonth);
             return;
@@ -526,12 +611,18 @@ public class InternalStatementService {
 
         BigDecimal totalRaw = BigDecimal.ZERO;
         BigDecimal totalAdj = BigDecimal.ZERO;
+        BigDecimal totalExpected = BigDecimal.ZERO;
+        BigDecimal totalRawOt = BigDecimal.ZERO;
+        BigDecimal totalAdjustedOt = BigDecimal.ZERO;
         int leaveDays = 0;
         int halfLeaveDays = 0;
 
         for (InternalStatementEntry e : entries) {
             totalRaw = totalRaw.add(e.getRawHours());
             totalAdj = totalAdj.add(e.getAdjustedHours());
+            totalExpected = totalExpected.add(e.getExpectedHours());
+            totalRawOt = totalRawOt.add(e.getRawOtHours());
+            totalAdjustedOt = totalAdjustedOt.add(e.getAdjustedOtHours());
             if (e.isLeaveDay()) leaveDays++;
             if (e.isHalfLeave()) halfLeaveDays++;
         }
@@ -548,9 +639,13 @@ public class InternalStatementService {
 
         s.setTotalRawHours(totalRaw);
         s.setTotalAdjustedHours(totalAdj);
+        s.setTotalExpectedHours(totalExpected);
+        s.setTotalRawOtHours(totalRawOt);
+        s.setTotalAdjustedOtHours(totalAdjustedOt);
         s.setTotalAdjustedDays(totalDays);
         s.setTotalLeaveDays(leaveDays);
         s.setTotalHalfLeaveDays(halfLeaveDays);
+        if ("DRAFT".equals(s.getStatus())) s.setRevision(s.getRevision() + 1);
         summaryRepo.save(s);
     }
 
@@ -562,6 +657,23 @@ public class InternalStatementService {
                 .findFirst().orElse(null);
     }
 
+    private boolean isConfirmed(Long companyId, Long employeeId, String yearMonth) {
+        return summaryRepo.findByCompanyIdAndEmployeeIdAndYearMonth(companyId, employeeId, yearMonth)
+                .map(s -> "CONFIRMED".equals(s.getStatus()) || "CLOSED".equals(s.getStatus()))
+                .orElse(false);
+    }
+
+    private void markPayrollStale(Long companyId, Long employeeId, String yearMonth) {
+        payrollRecordRepository.findByCompanyIdAndEmployeeIdAndPayrollMonth(companyId, employeeId, yearMonth)
+                .ifPresent(payroll -> {
+                    if ("PAID".equals(payroll.getStatus())) {
+                        throw new BusinessException("Payroll đã PAID, không thể mở lại Biên bản", HttpStatus.CONFLICT, "PAYROLL_PAID");
+                    }
+                    payroll.setStatus("STALE");
+                    payrollRecordRepository.save(payroll);
+                });
+    }
+
     private InternalCalendarDayDto toCalendarDay(InternalStatementEntry entry, String tsNote) {
         DayOfWeek dow = entry.getWorkDate().getDayOfWeek();
         boolean isWeekend = dow == DayOfWeek.SATURDAY || dow == DayOfWeek.SUNDAY;
@@ -569,8 +681,13 @@ public class InternalStatementService {
                 entry.getWorkDate(),
                 dow.name().substring(0, 3),
                 isWeekend,
+                entry.getExpectedHours(),
                 entry.getRawHours(),
                 entry.getAdjustedHours(),
+                entry.getRawOtHours(),
+                entry.getAdjustedOtHours(),
+                entry.getOtMultiplier(),
+                entry.getOtAdjustmentReason(),
                 entry.isLeaveDay(),
                 entry.isHalfLeave(),
                 entry.isPaidLeave(),

@@ -7,8 +7,13 @@ public record InternalCalendarDayDto(
         LocalDate workDate,
         String dayOfWeek,           // MON, TUE, ...
         boolean weekend,
+        BigDecimal expectedHours,
         BigDecimal rawHours,        // từ timesheet
         BigDecimal adjustedHours,   // HR override
+        BigDecimal rawOtHours,
+        BigDecimal adjustedOtHours,
+        BigDecimal otMultiplier,
+        String otAdjustmentReason,
         boolean leaveDay,           // nghỉ phép cả ngày
         boolean halfLeave,          // nghỉ phép nửa ngày
         boolean paidLeave,          // có lương

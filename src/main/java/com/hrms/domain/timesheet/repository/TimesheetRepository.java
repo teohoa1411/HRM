@@ -60,11 +60,11 @@ public interface TimesheetRepository extends JpaRepository<Timesheet, Long> {
         LEFT JOIN com.hrms.domain.timesheet.entity.TimesheetMonthly tm
             ON tm.userId = u.id AND tm.yearMonth = :yearMonth
         WHERE u.companyId = :companyId
+        AND e.id IS NOT NULL
         AND (
             EXISTS (SELECT t2 FROM Timesheet t2 WHERE t2.userId = u.id
                     AND t2.workDate >= :from AND t2.workDate <= :to AND t2.deletedAt IS NULL)
-            OR (e.id IS NOT NULL
-                AND e.status IN ('ACTIVE', 'PROBATION')
+            OR (e.status IN ('ACTIVE', 'PROBATION')
                 AND e.startDate <= :to)
         )
         GROUP BY u.id, u.username, e.firstName, e.lastName, tm.description, tm.additions

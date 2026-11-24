@@ -3,16 +3,30 @@ package com.hrms.domain.payroll.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hrms.domain.billing.entity.BillingRecord;
 import com.hrms.domain.billing.repository.BillingRecordRepository;
+import com.hrms.domain.company.entity.Company;
+import com.hrms.domain.company.entity.Department;
+import com.hrms.domain.company.entity.Position;
+import com.hrms.domain.company.repository.CompanyRepository;
+import com.hrms.domain.company.repository.DepartmentRepository;
+import com.hrms.domain.company.repository.PositionRepository;
 import com.hrms.domain.common.enums.EmployeeSourceType;
 import com.hrms.domain.common.exception.BusinessException;
 import com.hrms.domain.employee.entity.Employee;
 import com.hrms.domain.employee.repository.EmployeeRepository;
-import com.hrms.domain.billing.service.CostCalculationService;
+import com.hrms.domain.calendar.service.WorkCalendarService;
 import com.hrms.domain.finance.service.FinancialReportService;
+import com.hrms.domain.internal_statement.entity.InternalStatementEntry;
+import com.hrms.domain.internal_statement.entity.InternalStatementSummary;
+import com.hrms.domain.internal_statement.repository.InternalStatementEntryRepository;
+import com.hrms.domain.internal_statement.repository.InternalStatementSummaryRepository;
 import com.hrms.domain.insurance.dto.InsuranceCalculationResult;
 import com.hrms.domain.insurance.service.InsuranceService;
+import com.hrms.domain.jobrole.entity.JobRole;
+import com.hrms.domain.jobrole.repository.JobRoleRepository;
 import com.hrms.domain.payroll.dto.PayrollAdjustmentDto;
 import com.hrms.domain.payroll.dto.PayrollRecordDto;
+import com.hrms.domain.payroll.dto.PayrollReadinessDto;
+import com.hrms.domain.payroll.dto.PayrollReadinessEmployeeDto;
 import com.hrms.domain.payroll.dto.UpdatePayrollRequest;
 import com.hrms.domain.payroll.entity.PayrollAdjustment;
 import com.hrms.domain.payroll.entity.PayrollRecord;
@@ -21,6 +35,9 @@ import com.hrms.domain.payroll.repository.PayrollAdjustmentRepository;
 import com.hrms.domain.payroll.repository.PayrollRecordHistoryRepository;
 import com.hrms.domain.timesheet.repository.TimesheetPeriodLockRepository;
 import com.hrms.domain.payroll.repository.PayrollRecordRepository;
+import com.hrms.domain.payroll.repository.PayrollCostAllocationRepository;
+import com.hrms.domain.payroll.entity.PayrollCostAllocation;
+import com.hrms.domain.salary.repository.InternalSalaryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
@@ -36,7 +53,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -52,10 +71,18 @@ public class PayrollService {
     private final PayrollAdjustmentRepository adjustmentRepository;
     private final BillingRecordRepository billingRecordRepository;
     private final EmployeeRepository employeeRepository;
+    private final CompanyRepository companyRepository;
+    private final DepartmentRepository departmentRepository;
+    private final PositionRepository positionRepository;
+    private final JobRoleRepository jobRoleRepository;
     private final TimesheetPeriodLockRepository timesheetPeriodLockRepository;
     private final FinancialReportService financialReportService;
     private final InsuranceService insuranceService;
-    private final CostCalculationService costCalculationService;
+    private final InternalStatementSummaryRepository internalStatementSummaryRepository;
+    private final InternalStatementEntryRepository internalStatementEntryRepository;
+    private final InternalSalaryRepository internalSalaryRepository;
+    private final WorkCalendarService workCalendarService;
+    private final PayrollCostAllocationRepository payrollCostAllocationRepository;
     private final ObjectMapper objectMapper;
 
     /** Sinh PayrollRecord từ BillingRecord (INTERNAL) cho tháng chỉ định.
@@ -74,37 +101,44 @@ public class PayrollService {
 
         // Luôn tính lại billing trước khi sinh bảng lương để đảm bảo dữ liệu
         // lương/giá mới nhất được phản ánh (tránh stale billing sau khi thay đổi lương).
-        log.info("Auto-recalculating billing before payroll generation: company={} month={}", companyId, yearMonth);
-        try {
-            costCalculationService.calculateForMonth(companyId, yearMonth);
-        } catch (Exception e) {
-            log.warn("Billing recalc before payroll failed (company={} month={}): {}", companyId, yearMonth, e.getMessage());
-        }
-
         // Bug 1: Dùng ngày đầu tháng bảng lương làm referenceDate cho insurance
         LocalDate insuranceRefDate = payrollYm.atDay(1);
 
-        List<BillingRecord> billings = billingRecordRepository
-                .findByCompanyIdAndBillingMonth(companyId, yearMonth)
-                .stream()
-                .filter(b -> b.getSourceType() == EmployeeSourceType.INTERNAL)
+        List<Employee> eligibleEmployees = employeeRepository.findByCompanyIdAndDeletedAtIsNull(companyId).stream()
+                .filter(e -> e.getSourceType() == EmployeeSourceType.INTERNAL)
+                .filter(e -> !e.getStartDate().isAfter(payrollYm.atEndOfMonth()))
+                .filter(e -> e.getEndDate() == null || !e.getEndDate().isBefore(payrollYm.atDay(1)))
                 .toList();
-
-        java.util.Map<Long, java.util.List<BillingRecord>> byEmp = billings.stream()
-                .collect(java.util.stream.Collectors.groupingBy(BillingRecord::getEmployeeId));
+        Map<Long, InternalStatementSummary> confirmed = internalStatementSummaryRepository
+                .findByCompanyIdAndYearMonth(companyId, yearMonth).stream()
+                .filter(s -> "CONFIRMED".equals(s.getStatus()))
+                .collect(Collectors.toMap(InternalStatementSummary::getEmployeeId, Function.identity()));
+        List<String> missing = eligibleEmployees.stream().filter(e -> !confirmed.containsKey(e.getId()))
+                .map(Employee::getEmployeeCode).toList();
+        if (!missing.isEmpty()) {
+            throw new BusinessException("Chưa xác nhận Biên bản nội bộ cho: " + String.join(", ", missing),
+                    HttpStatus.CONFLICT, "INTERNAL_STATEMENT_NOT_CONFIRMED");
+        }
+        BigDecimal totalWorkdays = BigDecimal.valueOf(workCalendarService.getTotalWorkdays(companyId, yearMonth));
+        if (totalWorkdays.signum() <= 0) totalWorkdays = BigDecimal.valueOf(22);
 
         List<PayrollRecord> results = new ArrayList<>();
-        for (java.util.Map.Entry<Long, java.util.List<BillingRecord>> entry : byEmp.entrySet()) {
-            Long empId = entry.getKey();
-            java.util.List<BillingRecord> empBillings = entry.getValue();
-            BillingRecord first = empBillings.get(0);
-
-            BigDecimal totalDaysWorked = empBillings.stream()
-                    .map(BillingRecord::getDaysWorked).reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal totalDaysOff = empBillings.stream()
-                    .map(BillingRecord::getDaysOff).reduce(BigDecimal.ZERO, BigDecimal::add);
-            BigDecimal totalCost = empBillings.stream()
-                    .map(BillingRecord::getCostAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+        for (Employee employee : eligibleEmployees) {
+            Long empId = employee.getId();
+            InternalStatementSummary statement = confirmed.get(empId);
+            BigDecimal monthlySalary = internalSalaryRepository.findSalaryAt(empId, insuranceRefDate)
+                    .map(s -> s.getMonthlySalary()).orElse(BigDecimal.ZERO);
+            BigDecimal totalDaysWorked = statement.getTotalAdjustedDays();
+            BigDecimal totalDaysOff = totalWorkdays.subtract(totalDaysWorked).max(BigDecimal.ZERO);
+            BigDecimal hourlyRate = monthlySalary.divide(totalWorkdays.multiply(BigDecimal.valueOf(8)), 8,
+                    java.math.RoundingMode.HALF_UP);
+            BigDecimal totalCost = hourlyRate.multiply(statement.getTotalAdjustedHours())
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+            BigDecimal overtimeAmount = internalStatementEntryRepository
+                    .findByCompanyIdAndEmployeeIdAndYearMonth(companyId, empId, yearMonth).stream()
+                    .map(e -> hourlyRate.multiply(e.getAdjustedOtHours()).multiply(e.getOtMultiplier())
+                            .setScale(2, java.math.RoundingMode.HALF_UP))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
 
             PayrollRecord record = payrollRecordRepository
                     .findByCompanyIdAndEmployeeIdAndPayrollMonth(companyId, empId, yearMonth)
@@ -117,19 +151,20 @@ public class PayrollService {
                 record = PayrollRecord.builder()
                         .companyId(companyId)
                         .employeeId(empId)
-                        .billingRecordId(first.getId())
                         .payrollMonth(yearMonth)
-                        .baseSalary(first.getUnitCostPrice())
+                        .baseSalary(monthlySalary)
                         .daysWorked(totalDaysWorked)
                         .daysOff(totalDaysOff)
-                        .totalWorkdays(BigDecimal.valueOf(first.getTotalWorkdays()))
+                        .totalWorkdays(totalWorkdays)
                         .calculatedSalary(totalCost)
+                        .overtimeAmount(overtimeAmount)
+                        .sourceStatementRevision(statement.getRevision())
                         .bonus(BigDecimal.ZERO)
                         .deduction(BigDecimal.ZERO)
                         .insuranceSalary(insResult.insuranceSalary())
                         .insuranceEmployeeAmount(insResult.employeeAmount())
                         .insuranceEmployerAmount(insResult.employerAmount())
-                        .currency(first.getCurrency())
+                        .currency("VND")
                         .status("DRAFT")
                         .build();
                 record.setBhxhEmployeeAmount(insResult.bhxhEmployee());
@@ -140,13 +175,15 @@ public class PayrollService {
                 record.setBhtnEmployerAmount(insResult.bhtnEmployer());
                 // net = calculatedSalary - insuranceEmployeeAmount (chưa có bonus/deduction)
                 record.recalculateNetSalary();
-            } else if ("DRAFT".equals(record.getStatus()) || "ADJUSTED".equals(record.getStatus())) {
-                record.setBaseSalary(first.getUnitCostPrice());
+            } else if ("DRAFT".equals(record.getStatus()) || "ADJUSTED".equals(record.getStatus()) || "STALE".equals(record.getStatus())) {
+                record.setBaseSalary(monthlySalary);
                 record.setDaysWorked(totalDaysWorked);
                 record.setDaysOff(totalDaysOff);
-                record.setTotalWorkdays(BigDecimal.valueOf(first.getTotalWorkdays()));
+                record.setTotalWorkdays(totalWorkdays);
                 record.setCalculatedSalary(totalCost);
-                record.setBillingRecordId(first.getId());
+                record.setOvertimeAmount(overtimeAmount);
+                record.setSourceStatementRevision(statement.getRevision());
+                record.setStatus("DRAFT");
                 // Cập nhật BH mỗi lần regenerate
                 record.setInsuranceSalary(insResult.insuranceSalary());
                 record.setInsuranceEmployeeAmount(insResult.employeeAmount());
@@ -184,6 +221,48 @@ public class PayrollService {
         return toDto(records, companyId);
     }
 
+    @Transactional(readOnly = true)
+    public PayrollReadinessDto getReadiness(Long companyId, String yearMonth) {
+        YearMonth month = YearMonth.parse(yearMonth);
+        LocalDate refDate = month.atDay(1);
+        List<Employee> eligible = employeeRepository.findByCompanyIdAndDeletedAtIsNull(companyId).stream()
+                .filter(e -> e.getSourceType() == EmployeeSourceType.INTERNAL)
+                .filter(e -> !e.getStartDate().isAfter(month.atEndOfMonth()))
+                .filter(e -> e.getEndDate() == null || !e.getEndDate().isBefore(refDate)).toList();
+        Map<Long, InternalStatementSummary> summaries = internalStatementSummaryRepository
+                .findByCompanyIdAndYearMonth(companyId, yearMonth).stream()
+                .collect(Collectors.toMap(InternalStatementSummary::getEmployeeId, Function.identity()));
+        Map<Long, PayrollRecord> payrolls = payrollRecordRepository.findByCompanyIdAndPayrollMonth(companyId, yearMonth)
+                .stream().collect(Collectors.toMap(PayrollRecord::getEmployeeId, Function.identity()));
+        List<PayrollReadinessEmployeeDto> missing = new ArrayList<>();
+        List<PayrollReadinessEmployeeDto> unconfirmed = new ArrayList<>();
+        List<PayrollReadinessEmployeeDto> missingSalary = new ArrayList<>();
+        List<PayrollReadinessEmployeeDto> stale = new ArrayList<>();
+        int confirmed = 0;
+        for (Employee employee : eligible) {
+            InternalStatementSummary summary = summaries.get(employee.getId());
+            if (summary == null) missing.add(readinessEmployee(employee, "Chưa có Biên bản nội bộ"));
+            else if (!"CONFIRMED".equals(summary.getStatus())) unconfirmed.add(readinessEmployee(employee, "Biên bản chưa xác nhận"));
+            else confirmed++;
+            if (internalSalaryRepository.findSalaryAt(employee.getId(), refDate).isEmpty()) {
+                missingSalary.add(readinessEmployee(employee, "Chưa có lương hiệu lực"));
+            }
+            if (payrolls.get(employee.getId()) != null && "STALE".equals(payrolls.get(employee.getId()).getStatus())) {
+                stale.add(readinessEmployee(employee, "Payroll cần tạo lại"));
+            }
+        }
+        List<String> blockers = new ArrayList<>();
+        if (!missing.isEmpty()) blockers.add("Có nhân sự chưa có Biên bản nội bộ");
+        if (!unconfirmed.isEmpty()) blockers.add("Có Biên bản nội bộ chưa xác nhận");
+        if (!missingSalary.isEmpty()) blockers.add("Có nhân sự chưa có lương hiệu lực");
+        if (!stale.isEmpty()) blockers.add("Có Payroll stale cần tạo lại");
+        return new PayrollReadinessDto(blockers.isEmpty(), eligible.size(), confirmed, missing, unconfirmed, missingSalary, stale, blockers);
+    }
+
+    private PayrollReadinessEmployeeDto readinessEmployee(Employee employee, String reason) {
+        return new PayrollReadinessEmployeeDto(employee.getId(), employee.getPublicId(), employee.getEmployeeCode(), employee.getFullName(), reason);
+    }
+
     /** Cập nhật bonus/deduction/note hoặc adjustments chi tiết */
     @Transactional
     public PayrollRecordDto updatePayrollRecord(Long companyId, Long id, UpdatePayrollRequest req) {
@@ -195,12 +274,9 @@ public class PayrollService {
             throw new BusinessException("Cannot edit confirmed payroll record", HttpStatus.BAD_REQUEST, "INVALID_STATUS");
         }
 
-        // Nếu có adjustments → dùng adjustments chi tiết
-        if (req.adjustments() != null && !req.adjustments().isEmpty()) {
-            // Xóa adjustments cũ và tạo mới
-            adjustmentRepository.deleteByPayrollRecordId(record.getId());
-            adjustmentRepository.flush();
-
+        // Khi client gửi adjustments, thay thế toàn bộ danh sách (kể cả danh sách rỗng).
+        // Danh sách rỗng nghĩa là người dùng đã xóa tất cả các khoản phát sinh.
+        if (req.adjustments() != null) {
             List<PayrollAdjustment> newAdjs = new ArrayList<>();
             int order = 0;
             for (PayrollAdjustmentDto dto : req.adjustments()) {
@@ -213,8 +289,11 @@ public class PayrollService {
                         .sortOrder(dto.sortOrder() != null ? dto.sortOrder() : order++)
                         .build());
             }
-            adjustmentRepository.saveAll(newAdjs);
-            record.setAdjustments(newAdjs);
+            record.getAdjustments().clear();
+            record.getAdjustments().addAll(newAdjs);
+            // Không để các tổng legacy còn sót lại khi danh sách mới rỗng.
+            record.setBonus(BigDecimal.ZERO);
+            record.setDeduction(BigDecimal.ZERO);
         } else {
             // Fallback: dùng bonus/deduction đơn lẻ (backward compatible)
             if (req.bonus() != null) record.setBonus(req.bonus());
@@ -297,6 +376,17 @@ public class PayrollService {
             throw new BusinessException("No payroll records found for " + yearMonth, HttpStatus.NOT_FOUND, "NOT_FOUND");
         }
 
+        for (PayrollRecord record : records) {
+            InternalStatementSummary source = internalStatementSummaryRepository
+                    .findByCompanyIdAndEmployeeIdAndYearMonth(companyId, record.getEmployeeId(), yearMonth)
+                    .orElseThrow(() -> new BusinessException("Thiếu Biên bản nội bộ nguồn", HttpStatus.CONFLICT, "PAYROLL_STALE"));
+            if (!"CONFIRMED".equals(source.getStatus()) || source.getRevision() != record.getSourceStatementRevision()) {
+                record.setStatus("STALE");
+                payrollRecordRepository.save(record);
+                throw new BusinessException("Dữ liệu công đã thay đổi, hãy tạo lại Payroll", HttpStatus.CONFLICT, "PAYROLL_STALE");
+            }
+        }
+
         LocalDateTime now = LocalDateTime.now();
         for (PayrollRecord r : records) {
             if (!"CONFIRMED".equals(r.getStatus()) && !"EXPORTED".equals(r.getStatus()) && !"PAID".equals(r.getStatus())) {
@@ -308,11 +398,41 @@ public class PayrollService {
         payrollRecordRepository.saveAll(records);
         log.info("Confirmed payroll for company {} month {} by user {}", companyId, yearMonth, confirmedBy);
 
-        // Tự động cập nhật báo cáo tài chính sau khi confirm lương (chi phí thay đổi)
-        try {
-            financialReportService.generateMonthlyFinancialRecords(companyId, yearMonth);
-        } catch (Exception e) {
-            log.warn("Auto-generate financial records after payroll confirm failed: {}", e.getMessage());
+        // Mandatory derived data: an exception rolls back the payroll confirmation.
+        syncCostAllocations(companyId, yearMonth, records);
+        financialReportService.generateMonthlyFinancialRecords(companyId, yearMonth);
+    }
+
+    private void syncCostAllocations(Long companyId, String yearMonth, List<PayrollRecord> records) {
+        payrollCostAllocationRepository.deleteByCompanyIdAndPayrollMonth(companyId, yearMonth);
+        for (PayrollRecord payroll : records) {
+            Map<Long, BigDecimal> sellByCustomer = billingRecordRepository
+                    .findByCompanyAndEmployeeAndMonth(companyId, payroll.getEmployeeId(), yearMonth).stream()
+                    .filter(b -> b.getCustomerId() != null)
+                    .collect(Collectors.groupingBy(BillingRecord::getCustomerId,
+                            Collectors.reducing(BigDecimal.ZERO, BillingRecord::getSellAmount, BigDecimal::add)));
+            BigDecimal totalSell = sellByCustomer.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal target = payroll.getNetSalary();
+            if (sellByCustomer.isEmpty() || totalSell.signum() <= 0) {
+                payrollCostAllocationRepository.save(PayrollCostAllocation.builder()
+                        .companyId(companyId).payrollRecordId(payroll.getId()).employeeId(payroll.getEmployeeId())
+                        .payrollMonth(yearMonth).customerId(null).allocationRatio(BigDecimal.ONE)
+                        .allocatedAmount(target).build());
+                continue;
+            }
+            BigDecimal assigned = BigDecimal.ZERO;
+            List<Map.Entry<Long, BigDecimal>> customerSell = new ArrayList<>(sellByCustomer.entrySet());
+            for (int i = 0; i < customerSell.size(); i++) {
+                Map.Entry<Long, BigDecimal> customer = customerSell.get(i);
+                BigDecimal amount = i == customerSell.size() - 1 ? target.subtract(assigned)
+                        : target.multiply(customer.getValue()).divide(totalSell, 2, java.math.RoundingMode.HALF_UP);
+                payrollCostAllocationRepository.save(PayrollCostAllocation.builder()
+                        .companyId(companyId).payrollRecordId(payroll.getId()).employeeId(payroll.getEmployeeId())
+                        .payrollMonth(yearMonth).customerId(customer.getKey())
+                        .allocationRatio(customer.getValue().divide(totalSell, 6, java.math.RoundingMode.HALF_UP))
+                        .allocatedAmount(amount).build());
+                assigned = assigned.add(amount);
+            }
         }
     }
 
@@ -390,93 +510,148 @@ public class PayrollService {
         List<PayrollRecord> records = payrollRecordRepository
                 .findByCompanyIdAndPayrollMonth(companyId, yearMonth);
 
-        Map<Long, Employee> empMap = employeeRepository
-                .findByCompanyIdAndDeletedAtIsNull(companyId)
-                .stream()
-                .collect(Collectors.toMap(Employee::getId, Function.identity()));
+        Map<Long, Employee> empMap = employeeRepository.findAllById(
+                        records.stream().map(PayrollRecord::getEmployeeId).toList())
+                .stream().collect(Collectors.toMap(Employee::getId, Function.identity()));
+        Map<Long, Department> departments = departmentRepository.findByCompanyIdAndDeletedAtIsNull(companyId)
+                .stream().collect(Collectors.toMap(Department::getId, Function.identity()));
+        Map<Long, Position> positions = positionRepository.findByCompanyIdAndDeletedAtIsNull(companyId)
+                .stream().collect(Collectors.toMap(Position::getId, Function.identity()));
+        Map<Long, JobRole> jobRoles = jobRoleRepository.findAll().stream()
+                .filter(role -> companyId.equals(role.getCompanyId()) && role.getDeletedAt() == null)
+                .collect(Collectors.toMap(JobRole::getId, Function.identity()));
+        Map<Long, List<PayrollAdjustment>> adjustmentsByRecord = adjustmentRepository
+                .findByPayrollRecordIdInOrderByPayrollRecordIdAscSortOrderAsc(
+                        records.stream().map(PayrollRecord::getId).toList())
+                .stream().collect(Collectors.groupingBy(PayrollAdjustment::getPayrollRecordId));
+        Company company = companyRepository.findById(companyId).orElse(null);
+
+        records.sort(Comparator.comparing(record -> {
+            Employee employee = empMap.get(record.getEmployeeId());
+            return employee != null ? employee.getEmployeeCode() : "";
+        }));
 
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
-            Sheet sheet = wb.createSheet("Bang luong " + yearMonth);
+            ExcelStyles styles = new ExcelStyles(wb);
+            Sheet sheet = wb.createSheet("Bảng lương tổng hợp");
+            sheet.createFreezePane(0, 3);
+            sheet.setAutoFilter(new CellRangeAddress(2, Math.max(2, records.size() + 2), 0, 23));
+            sheet.setFitToPage(true);
+            sheet.getPrintSetup().setLandscape(true);
+            sheet.getPrintSetup().setFitWidth((short) 1);
+            sheet.getPrintSetup().setFitHeight((short) 0);
 
-            // Header style
-            CellStyle headerStyle = wb.createCellStyle();
-            headerStyle.setFillForegroundColor(IndexedColors.ROYAL_BLUE.getIndex());
-            headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            Font headerFont = wb.createFont();
-            headerFont.setBold(true);
-            headerFont.setColor(IndexedColors.WHITE.getIndex());
-            headerStyle.setFont(headerFont);
-            headerStyle.setBorderBottom(BorderStyle.THIN);
-
-            // Net salary highlight style
-            CellStyle netStyle = wb.createCellStyle();
-            netStyle.setFillForegroundColor(IndexedColors.LIGHT_YELLOW.getIndex());
-            netStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-            Font boldFont = wb.createFont();
-            boldFont.setBold(true);
-            netStyle.setFont(boldFont);
-
-            // Title row
             Row titleRow = sheet.createRow(0);
             Cell titleCell = titleRow.createCell(0);
             titleCell.setCellValue("BẢNG LƯƠNG NỘI BỘ - THÁNG " + yearMonth);
-            CellStyle titleStyle = wb.createCellStyle();
-            Font titleFont = wb.createFont();
-            titleFont.setBold(true);
-            titleFont.setFontHeightInPoints((short) 14);
-            titleStyle.setFont(titleFont);
-            titleCell.setCellStyle(titleStyle);
+            titleCell.setCellStyle(styles.title());
             sheet.addMergedRegion(new CellRangeAddress(0, 0, 0, 23));
+            Row metaRow = sheet.createRow(1);
+            Cell metaCell = metaRow.createCell(0);
+            boolean preliminary = records.stream().anyMatch(record -> !List.of("CONFIRMED", "EXPORTED", "PAID").contains(record.getStatus()));
+            metaCell.setCellValue((company != null ? company.getName() + " · " : "")
+                    + "Xuất lúc " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm"))
+                    + (preliminary ? " · BẢN TẠM TÍNH" : " · BẢN ĐÃ CHỐT"));
+            metaCell.setCellStyle(styles.meta());
+            sheet.addMergedRegion(new CellRangeAddress(1, 1, 0, 23));
 
-            // Header row
             String[] headers = {"STT", "Mã NV", "Họ và tên", "Phòng ban", "Vị trí",
-                    "Tháng", "Ngày làm", "Ngày nghỉ", "Lương CB",
-                    "Lương tính công", "Lương đóng BH",
-                    "BHXH NV", "BHYT NV", "BHTN NV", "Tổng BH NV",
-                    "BHXH CTy", "BHYT CTy", "BHTN CTy", "Tổng BH CTy",
-                    "Thưởng", "Khấu trừ", "Ghi chú KT", "Lương Net", "Trạng thái"};
+                    "Tháng", "Ngày làm", "Ngày nghỉ", "Lương CB", "Lương tính công", "Lương đóng BH",
+                    "BHXH NV", "BHYT NV", "BHTN NV", "Tổng BH NV", "BHXH CTy", "BHYT CTy", "BHTN CTy",
+                    "Tổng BH CTy", "Thưởng", "Khấu trừ", "Ghi chú KT", "Lương Net", "Trạng thái"};
             Row headerRow = sheet.createRow(2);
             for (int i = 0; i < headers.length; i++) {
                 Cell cell = headerRow.createCell(i);
                 cell.setCellValue(headers[i]);
-                cell.setCellStyle(headerStyle);
-                sheet.setColumnWidth(i, 4500);
+                cell.setCellStyle(styles.header());
             }
-            sheet.setColumnWidth(2, 6000); // Họ tên
-            sheet.setColumnWidth(12, 7000); // Ghi chú
+            int[] widths = {8, 14, 26, 20, 20, 12, 11, 11, 16, 17, 16, 14, 14, 14, 15, 14, 14, 14, 15, 15, 15, 28, 17, 14};
+            for (int i = 0; i < widths.length; i++) sheet.setColumnWidth(i, widths[i] * 256);
 
-            // Data rows
             int rowNum = 3;
             int stt = 1;
-            for (PayrollRecord r : records) {
-                Employee emp = empMap.get(r.getEmployeeId());
+            for (PayrollRecord record : records) {
+                Employee employee = empMap.get(record.getEmployeeId());
+                Department department = employee != null ? departments.get(employee.getDepartmentId()) : null;
+                Position position = employee != null ? positions.get(employee.getPositionId()) : null;
+                JobRole jobRole = employee != null ? jobRoles.get(employee.getJobRoleId()) : null;
                 Row row = sheet.createRow(rowNum++);
-                row.createCell(0).setCellValue(stt++);
-                row.createCell(1).setCellValue(emp != null ? emp.getEmployeeCode() : "");
-                row.createCell(2).setCellValue(emp != null ? emp.getFullName() : "");
-                row.createCell(3).setCellValue(""); // departmentName - cần join
-                row.createCell(4).setCellValue(""); // jobRoleName - cần join
-                row.createCell(5).setCellValue(r.getPayrollMonth());
-                row.createCell(6).setCellValue(r.getDaysWorked().doubleValue());
-                row.createCell(7).setCellValue(r.getDaysOff().doubleValue());
-                row.createCell(8).setCellValue(r.getBaseSalary().doubleValue());
-                row.createCell(9).setCellValue(r.getCalculatedSalary().doubleValue());
-                row.createCell(10).setCellValue(r.getInsuranceSalary() != null ? r.getInsuranceSalary().doubleValue() : 0);
-                row.createCell(11).setCellValue(r.getBhxhEmployeeAmount() != null ? r.getBhxhEmployeeAmount().doubleValue() : 0);
-                row.createCell(12).setCellValue(r.getBhytEmployeeAmount() != null ? r.getBhytEmployeeAmount().doubleValue() : 0);
-                row.createCell(13).setCellValue(r.getBhtnEmployeeAmount() != null ? r.getBhtnEmployeeAmount().doubleValue() : 0);
-                row.createCell(14).setCellValue(r.getInsuranceEmployeeAmount().doubleValue());
-                row.createCell(15).setCellValue(r.getBhxhEmployerAmount() != null ? r.getBhxhEmployerAmount().doubleValue() : 0);
-                row.createCell(16).setCellValue(r.getBhytEmployerAmount() != null ? r.getBhytEmployerAmount().doubleValue() : 0);
-                row.createCell(17).setCellValue(r.getBhtnEmployerAmount() != null ? r.getBhtnEmployerAmount().doubleValue() : 0);
-                row.createCell(18).setCellValue(r.getInsuranceEmployerAmount().doubleValue());
-                row.createCell(19).setCellValue(r.getBonus().doubleValue());
-                row.createCell(20).setCellValue(r.getDeduction().doubleValue());
-                row.createCell(21).setCellValue(r.getAdjustmentNote() != null ? r.getAdjustmentNote() : "");
-                Cell netCell = row.createCell(22);
-                netCell.setCellValue(r.getNetSalary().doubleValue());
-                netCell.setCellStyle(netStyle);
-                row.createCell(23).setCellValue(r.getStatus());
+                writeText(row, 0, String.valueOf(stt++), styles.center());
+                writeText(row, 1, employee != null ? employee.getEmployeeCode() : "", styles.text());
+                writeText(row, 2, employee != null ? employee.getFullName() : "", styles.text());
+                writeText(row, 3, department != null ? department.getName() : "", styles.text());
+                writeText(row, 4, position != null ? position.getName() : (jobRole != null ? jobRole.getName() : ""), styles.text());
+                writeText(row, 5, record.getPayrollMonth(), styles.center());
+                writeNumber(row, 6, record.getDaysWorked(), styles.decimal());
+                writeNumber(row, 7, record.getDaysOff(), styles.decimal());
+                writeNumber(row, 8, record.getBaseSalary(), styles.money());
+                writeNumber(row, 9, record.getCalculatedSalary(), styles.money());
+                writeNumber(row, 10, record.getInsuranceSalary(), styles.money());
+                writeNumber(row, 11, record.getBhxhEmployeeAmount(), styles.money());
+                writeNumber(row, 12, record.getBhytEmployeeAmount(), styles.money());
+                writeNumber(row, 13, record.getBhtnEmployeeAmount(), styles.money());
+                writeNumber(row, 14, record.getInsuranceEmployeeAmount(), styles.money());
+                writeNumber(row, 15, record.getBhxhEmployerAmount(), styles.money());
+                writeNumber(row, 16, record.getBhytEmployerAmount(), styles.money());
+                writeNumber(row, 17, record.getBhtnEmployerAmount(), styles.money());
+                writeNumber(row, 18, record.getInsuranceEmployerAmount(), styles.money());
+                writeNumber(row, 19, record.getBonus(), styles.positiveMoney());
+                writeNumber(row, 20, record.getDeduction(), styles.negativeMoney());
+                writeText(row, 21, record.getAdjustmentNote() != null ? record.getAdjustmentNote() : "", styles.text());
+                writeNumber(row, 22, record.getNetSalary(), styles.netMoney());
+                writeText(row, 23, record.getStatus(), styles.center());
+            }
+
+            Row totalRow = sheet.createRow(rowNum);
+            writeText(totalRow, 0, "TỔNG CỘNG", styles.totalLabel());
+            sheet.addMergedRegion(new CellRangeAddress(rowNum, rowNum, 0, 7));
+            int excelFirstDataRow = 4;
+            int excelLastDataRow = Math.max(excelFirstDataRow, rowNum);
+            for (int column : new int[]{8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22}) {
+                Cell cell = totalRow.createCell(column);
+                cell.setCellFormula("SUM(" + columnLetter(column) + excelFirstDataRow + ":" + columnLetter(column) + excelLastDataRow + ")");
+                cell.setCellStyle(column == 19 ? styles.positiveTotal() : column == 20 ? styles.negativeTotal() : column == 22 ? styles.netTotal() : styles.moneyTotal());
+            }
+
+            Sheet details = wb.createSheet("Chi tiết điều chỉnh");
+            details.createFreezePane(0, 3);
+            details.setAutoFilter(new CellRangeAddress(2, Math.max(2, adjustmentsByRecord.values().stream().mapToInt(List::size).sum() + 2), 0, 8));
+            details.setFitToPage(true);
+            Row detailTitle = details.createRow(0);
+            Cell detailTitleCell = detailTitle.createCell(0);
+            detailTitleCell.setCellValue("CHI TIẾT THƯỞNG & KHẤU TRỪ - THÁNG " + yearMonth);
+            detailTitleCell.setCellStyle(styles.title());
+            details.addMergedRegion(new CellRangeAddress(0, 0, 0, 8));
+            Row detailMeta = details.createRow(1);
+            Cell detailMetaCell = detailMeta.createCell(0);
+            detailMetaCell.setCellValue("Dùng để đối soát các khoản phát sinh trước khi chi trả lương.");
+            detailMetaCell.setCellStyle(styles.meta());
+            details.addMergedRegion(new CellRangeAddress(1, 1, 0, 8));
+            String[] detailHeaders = {"STT", "Mã NV", "Họ và tên", "Loại", "Nội dung", "Số tiền", "Chịu thuế", "Tháng", "Trạng thái"};
+            Row detailHeaderRow = details.createRow(2);
+            for (int i = 0; i < detailHeaders.length; i++) {
+                Cell cell = detailHeaderRow.createCell(i);
+                cell.setCellValue(detailHeaders[i]);
+                cell.setCellStyle(styles.header());
+            }
+            int[] detailWidths = {8, 14, 26, 16, 42, 16, 14, 12, 14};
+            for (int i = 0; i < detailWidths.length; i++) details.setColumnWidth(i, detailWidths[i] * 256);
+            int detailRowNum = 3;
+            int detailStt = 1;
+            for (PayrollRecord record : records) {
+                Employee employee = empMap.get(record.getEmployeeId());
+                for (PayrollAdjustment adjustment : adjustmentsByRecord.getOrDefault(record.getId(), List.of())) {
+                    Row row = details.createRow(detailRowNum++);
+                    writeText(row, 0, String.valueOf(detailStt++), styles.center());
+                    writeText(row, 1, employee != null ? employee.getEmployeeCode() : "", styles.text());
+                    writeText(row, 2, employee != null ? employee.getFullName() : "", styles.text());
+                    writeText(row, 3, adjustmentTypeLabel(adjustment), styles.center());
+                    writeText(row, 4, adjustment.getDescription(), styles.text());
+                    writeNumber(row, 5, adjustment.getAmount(), adjustment.getType().name().equals("DEDUCTION") ? styles.negativeMoney() : styles.positiveMoney());
+                    writeText(row, 6, adjustment.isTaxable() ? "Có" : "Không", styles.center());
+                    writeText(row, 7, record.getPayrollMonth(), styles.center());
+                    writeText(row, 8, record.getStatus(), styles.center());
+                }
             }
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -485,6 +660,61 @@ public class PayrollService {
         } catch (IOException e) {
             throw new BusinessException("Failed to export Excel", HttpStatus.INTERNAL_SERVER_ERROR, "EXPORT_ERROR");
         }
+    }
+
+    private String adjustmentTypeLabel(PayrollAdjustment adjustment) {
+        return switch (adjustment.getType()) {
+            case BONUS -> "Thưởng";
+            case ALLOWANCE -> "Phụ cấp";
+            case DEDUCTION -> "Khấu trừ";
+        };
+    }
+
+    private String columnLetter(int column) {
+        StringBuilder result = new StringBuilder();
+        int value = column;
+        do {
+            result.insert(0, (char) ('A' + (value % 26)));
+            value = (value / 26) - 1;
+        } while (value >= 0);
+        return result.toString();
+    }
+
+    private void writeText(Row row, int column, String value, CellStyle style) {
+        Cell cell = row.createCell(column);
+        cell.setCellValue(value != null ? value : "");
+        cell.setCellStyle(style);
+    }
+
+    private void writeNumber(Row row, int column, BigDecimal value, CellStyle style) {
+        Cell cell = row.createCell(column);
+        cell.setCellValue(value != null ? value.doubleValue() : 0d);
+        cell.setCellStyle(style);
+    }
+
+    private record ExcelStyles(CellStyle header, CellStyle title, CellStyle meta, CellStyle text, CellStyle center,
+                               CellStyle decimal, CellStyle money, CellStyle positiveMoney, CellStyle negativeMoney,
+                               CellStyle netMoney, CellStyle totalLabel, CellStyle moneyTotal, CellStyle positiveTotal,
+                               CellStyle negativeTotal, CellStyle netTotal) {
+        private ExcelStyles(Workbook workbook) {
+            this(createHeader(workbook), createTitle(workbook), createMeta(workbook), createText(workbook),
+                    createCenter(workbook), createDecimal(workbook), createMoney(workbook, null),
+                    createMoney(workbook, IndexedColors.DARK_GREEN), createMoney(workbook, IndexedColors.DARK_RED),
+                    createMoney(workbook, IndexedColors.DARK_BLUE), createTotalLabel(workbook),
+                    createTotalMoney(workbook, null), createTotalMoney(workbook, IndexedColors.DARK_GREEN),
+                    createTotalMoney(workbook, IndexedColors.DARK_RED), createTotalMoney(workbook, IndexedColors.DARK_BLUE));
+        }
+
+        private static CellStyle createHeader(Workbook workbook) { CellStyle s = base(workbook); s.setFillForegroundColor(IndexedColors.ROYAL_BLUE.getIndex()); s.setFillPattern(FillPatternType.SOLID_FOREGROUND); Font f = workbook.createFont(); f.setBold(true); f.setColor(IndexedColors.WHITE.getIndex()); s.setFont(f); s.setAlignment(HorizontalAlignment.CENTER); return s; }
+        private static CellStyle createTitle(Workbook workbook) { CellStyle s = workbook.createCellStyle(); Font f = workbook.createFont(); f.setBold(true); f.setFontHeightInPoints((short) 15); f.setColor(IndexedColors.DARK_BLUE.getIndex()); s.setFont(f); return s; }
+        private static CellStyle createMeta(Workbook workbook) { CellStyle s = workbook.createCellStyle(); Font f = workbook.createFont(); f.setItalic(true); f.setColor(IndexedColors.GREY_50_PERCENT.getIndex()); s.setFont(f); return s; }
+        private static CellStyle createText(Workbook workbook) { return base(workbook); }
+        private static CellStyle createCenter(Workbook workbook) { CellStyle s = base(workbook); s.setAlignment(HorizontalAlignment.CENTER); return s; }
+        private static CellStyle createDecimal(Workbook workbook) { CellStyle s = base(workbook); s.setAlignment(HorizontalAlignment.RIGHT); s.setDataFormat(workbook.createDataFormat().getFormat("#,##0.0")); return s; }
+        private static CellStyle createMoney(Workbook workbook, IndexedColors color) { CellStyle s = base(workbook); s.setAlignment(HorizontalAlignment.RIGHT); s.setDataFormat(workbook.createDataFormat().getFormat("#,##0;[Red]-#,##0")); if (color != null) { Font f = workbook.createFont(); f.setColor(color.getIndex()); s.setFont(f); } return s; }
+        private static CellStyle createTotalLabel(Workbook workbook) { CellStyle s = base(workbook); s.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex()); s.setFillPattern(FillPatternType.SOLID_FOREGROUND); Font f = workbook.createFont(); f.setBold(true); s.setFont(f); s.setAlignment(HorizontalAlignment.RIGHT); return s; }
+        private static CellStyle createTotalMoney(Workbook workbook, IndexedColors color) { CellStyle s = createMoney(workbook, color); s.setFillForegroundColor(IndexedColors.GREY_25_PERCENT.getIndex()); s.setFillPattern(FillPatternType.SOLID_FOREGROUND); Font f = workbook.createFont(); f.setBold(true); if (color != null) f.setColor(color.getIndex()); s.setFont(f); return s; }
+        private static CellStyle base(Workbook workbook) { CellStyle s = workbook.createCellStyle(); s.setBorderBottom(BorderStyle.THIN); s.setBorderTop(BorderStyle.THIN); s.setBorderLeft(BorderStyle.THIN); s.setBorderRight(BorderStyle.THIN); s.setVerticalAlignment(VerticalAlignment.CENTER); return s; }
     }
 
     /** Kiểm tra STALE */
@@ -528,6 +758,7 @@ public class PayrollService {
                 r.getDaysOff(),
                 r.getTotalWorkdays(),
                 r.getCalculatedSalary(),
+                r.getOvertimeAmount(),
                 r.getBonus(),
                 r.getDeduction(),
                 r.getInsuranceSalary(),

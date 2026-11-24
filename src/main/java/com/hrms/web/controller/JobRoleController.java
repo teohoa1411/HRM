@@ -24,14 +24,14 @@ import java.util.List;
 @RestController
 @RequestMapping("/v1/job-roles")
 @RequiredArgsConstructor
-@Tag(name = "Job Roles", description = "Quáº£n lÃ½ job role theo tá»«ng cÃ´ng ty")
+@Tag(name = "Job Roles", description = "Quản lý job role theo từng công ty")
 public class JobRoleController {
 
     private final JobRoleService jobRoleService;
 
     @GetMapping
     @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
-    @Operation(summary = "Danh sÃ¡ch job roles cá»§a cÃ´ng ty hiá»‡n táº¡i")
+    @Operation(summary = "Danh sách job roles của công ty hiện tại")
     public ResponseEntity<ApiResponse<Page<JobRoleResponse>>> listJobRoles(
             @PageableDefault(size = 50) Pageable pageable) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
@@ -40,7 +40,7 @@ public class JobRoleController {
 
     @GetMapping("/active")
     @PreAuthorize("isAuthenticated()")
-    @Operation(summary = "Danh sÃ¡ch job roles Ä‘ang active (dÃ¹ng cho dropdown)")
+    @Operation(summary = "Danh sách job roles đang active (dùng cho dropdown)")
     public ResponseEntity<ApiResponse<List<JobRoleResponse>>> listActiveJobRoles() {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(jobRoleService.listActive(companyId)));
@@ -48,25 +48,25 @@ public class JobRoleController {
 
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
-    @Operation(summary = "Láº¥y chi tiáº¿t job role")
+    @Operation(summary = "Lấy chi tiết job role")
     public ResponseEntity<ApiResponse<JobRoleResponse>> getJobRole(@PathVariable Long id) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(jobRoleService.getById(id, companyId)));
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
-    @Operation(summary = "Táº¡o job role má»›i cho cÃ´ng ty")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
+    @Operation(summary = "Tạo job role mới cho công ty")
     public ResponseEntity<ApiResponse<JobRoleResponse>> createJobRole(
             @Valid @RequestBody CreateJobRoleRequest request) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.ok(jobRoleService.createJobRole(companyId, request), "ÄÃ£ táº¡o job role"));
+                .body(ApiResponse.ok(jobRoleService.createJobRole(companyId, request), "Đã tạo job role"));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
-    @Operation(summary = "Cáº­p nháº­t job role")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
+    @Operation(summary = "Cập nhật job role")
     public ResponseEntity<ApiResponse<JobRoleResponse>> updateJobRole(
             @PathVariable Long id,
             @Valid @RequestBody CreateJobRoleRequest request) {
@@ -75,39 +75,39 @@ public class JobRoleController {
     }
 
     @PatchMapping("/{id}/toggle-active")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
-    @Operation(summary = "Báº­t/táº¯t tráº¡ng thÃ¡i active cá»§a job role")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
+    @Operation(summary = "Bật/tắt trạng thái active của job role")
     public ResponseEntity<ApiResponse<Void>> toggleActive(@PathVariable Long id) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         jobRoleService.toggleActive(id, companyId);
-        return ResponseEntity.ok(ApiResponse.ok(null, "ÄÃ£ cáº­p nháº­t tráº¡ng thÃ¡i"));
+        return ResponseEntity.ok(ApiResponse.ok(null, "Đã cập nhật trạng thái"));
     }
 
     @PostMapping("/{id}/prices")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
-    @Operation(summary = "Äáº·t giÃ¡ cho job role trong cÃ´ng ty hiá»‡n táº¡i")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
+    @Operation(summary = "Đặt giá cho job role trong công ty hiện tại")
     public ResponseEntity<ApiResponse<Void>> setPrice(
             @PathVariable Long id,
             @Valid @RequestBody SetJobRolePriceRequest request) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         jobRoleService.setPrice(id, companyId, request);
-        return ResponseEntity.ok(ApiResponse.ok(null, "ÄÃ£ cáº­p nháº­t giÃ¡"));
+        return ResponseEntity.ok(ApiResponse.ok(null, "Đã cập nhật giá"));
     }
 
     @GetMapping("/{id}/prices")
     @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
-    @Operation(summary = "Lá»‹ch sá»­ giÃ¡ cá»§a job role trong cÃ´ng ty hiá»‡n táº¡i")
+    @Operation(summary = "Lịch sử giá của job role trong công ty hiện tại")
     public ResponseEntity<ApiResponse<List<JobRolePrice>>> getPriceHistory(@PathVariable Long id) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(jobRoleService.getPriceHistory(id, companyId)));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
-    @Operation(summary = "XÃ³a job role (soft delete)")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
+    @Operation(summary = "Xóa job role (soft delete)")
     public ResponseEntity<ApiResponse<Void>> deleteJobRole(@PathVariable Long id) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         jobRoleService.deleteJobRole(id, companyId);
-        return ResponseEntity.ok(ApiResponse.ok(null, "ÄÃ£ xÃ³a job role"));
+        return ResponseEntity.ok(ApiResponse.ok(null, "Đã xóa job role"));
     }
 }

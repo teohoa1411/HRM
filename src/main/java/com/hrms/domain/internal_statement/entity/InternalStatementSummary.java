@@ -23,6 +23,14 @@ public class InternalStatementSummary {
     @Column(name = "record_month", nullable = false, length = 7)
     private String yearMonth;
 
+    @Column(name = "total_expected_hours", precision = 7, scale = 1)
+    @Builder.Default
+    private BigDecimal totalExpectedHours = BigDecimal.ZERO;
+
+    @Column(name = "revision", nullable = false)
+    @Builder.Default
+    private long revision = 1L;
+
     @Column(name = "total_raw_hours", precision = 7, scale = 1)
     @Builder.Default
     private BigDecimal totalRawHours = BigDecimal.ZERO;
@@ -30,6 +38,14 @@ public class InternalStatementSummary {
     @Column(name = "total_adjusted_hours", precision = 7, scale = 1)
     @Builder.Default
     private BigDecimal totalAdjustedHours = BigDecimal.ZERO;
+
+    @Column(name = "total_raw_ot_hours", precision = 7, scale = 1)
+    @Builder.Default
+    private BigDecimal totalRawOtHours = BigDecimal.ZERO;
+
+    @Column(name = "total_adjusted_ot_hours", precision = 7, scale = 1)
+    @Builder.Default
+    private BigDecimal totalAdjustedOtHours = BigDecimal.ZERO;
 
     /** totalAdjustedHours / 8.0 */
     @Column(name = "total_adjusted_days", precision = 6, scale = 2)

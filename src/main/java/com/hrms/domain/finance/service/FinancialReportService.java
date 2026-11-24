@@ -13,6 +13,8 @@ import com.hrms.domain.finance.entity.MonthlyFinancialRecord;
 import com.hrms.domain.finance.repository.MonthlyFinancialRecordRepository;
 import com.hrms.domain.payroll.entity.PayrollRecord;
 import com.hrms.domain.payroll.repository.PayrollRecordRepository;
+import com.hrms.domain.payroll.repository.PayrollCostAllocationRepository;
+import com.hrms.domain.payroll.entity.PayrollCostAllocation;
 import com.hrms.domain.statement.entity.Statement;
 import com.hrms.domain.statement.entity.StatementLineItem;
 import com.hrms.domain.statement.repository.StatementRepository;
@@ -41,6 +43,7 @@ public class FinancialReportService {
     private final MonthlyFinancialRecordRepository financialRecordRepository;
     private final BillingRecordRepository billingRecordRepository;
     private final PayrollRecordRepository payrollRecordRepository;
+    private final PayrollCostAllocationRepository payrollCostAllocationRepository;
     private final StatementRepository statementRepository;
     private final EmployeeRepository employeeRepository;
     private final CustomerRepository customerRepository;
@@ -48,7 +51,7 @@ public class FinancialReportService {
     /**
      * Sinh MonthlyFinancialRecord tổng hợp sau khi kế toán confirm toàn bộ.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public void generateMonthlyFinancialRecords(Long companyId, String yearMonth) {
         List<BillingRecord> billings = billingRecordRepository
                 .findByCompanyIdAndBillingMonth(companyId, yearMonth);
@@ -57,6 +60,10 @@ public class FinancialReportService {
                 .findByCompanyIdAndPayrollMonth(companyId, yearMonth)
                 .stream()
                 .collect(Collectors.toMap(PayrollRecord::getEmployeeId, Function.identity()));
+        Map<String, BigDecimal> payrollCosts = payrollCostAllocationRepository
+                .findByCompanyIdAndPayrollMonth(companyId, yearMonth).stream()
+                .collect(Collectors.groupingBy(a -> a.getEmployeeId() + ":" + (a.getCustomerId() == null ? "0" : a.getCustomerId()),
+                        Collectors.reducing(BigDecimal.ZERO, PayrollCostAllocation::getAllocatedAmount, BigDecimal::add)));
 
         // Aggregate billing records theo (employeeId, customerId) — sau V29 mỗi cặp này
         // có thể bao gồm nhiều period (vd: rời rồi quay lại customer cùng tháng).
@@ -98,10 +105,7 @@ public class FinancialReportService {
                 // (nếu NV có nhiều customer trong tháng, chỉ áp vào customer "chính" — first encountered)
                 PayrollRecord pr = payrollMap.get(empId);
                 if (pr != null) {
-                    cost = pr.getNetSalary().multiply(
-                            totalCost.compareTo(BigDecimal.ZERO) > 0
-                                    ? totalCost.divide(pr.getCalculatedSalary().max(BigDecimal.ONE), 6, RoundingMode.HALF_UP)
-                                    : BigDecimal.ONE);
+                    cost = payrollCosts.getOrDefault(empId + ":" + (customerId == null ? "0" : customerId), BigDecimal.ZERO);
                     bonus = pr.getBonus();
                     deduction = pr.getDeduction();
                 }

@@ -68,6 +68,14 @@ public class StatementLineItem {
     @Builder.Default
     private BigDecimal adjustedAmount = BigDecimal.ZERO;
 
+    /**
+     * Đơn vị tính giá cho dòng này: HOURLY | DAILY | MONTHLY.
+     * Ảnh hưởng đến cách tính adjustedAmount trong recalculateAmounts().
+     */
+    @Column(name = "price_unit", nullable = false, length = 10)
+    @Builder.Default
+    private String priceUnit = "MONTHLY";
+
     @Column(name = "note", columnDefinition = "TEXT")
     private String note;
 
@@ -85,7 +93,11 @@ public class StatementLineItem {
 
     /**
      * Tính lại các amount dựa trên hours.
-     * Công thức: amount = (hours / hoursPerDay) × unitSellPrice
+     *
+     * <ul>
+     *   <li><b>HOURLY</b>: amount = hours × unitSellPrice (giá theo giờ)</li>
+     *   <li><b>DAILY / MONTHLY</b>: amount = (hours / hoursPerDay) × unitSellPrice</li>
+     * </ul>
      *
      * Gọi sau khi thay đổi adjustedHours hoặc unitSellPrice.
      */
@@ -94,14 +106,22 @@ public class StatementLineItem {
                 ? this.hoursPerDay
                 : BigDecimal.valueOf(8.0);
 
-        // Quy đổi hours → days để tính amount (giữ tương thích với đơn giá theo ngày)
-        this.originalDays   = this.originalHours.divide(divisor, 1, java.math.RoundingMode.HALF_UP);
-        this.adjustedDays   = this.adjustedHours.divide(divisor, 1, java.math.RoundingMode.HALF_UP);
+        this.originalDays = this.originalHours.divide(divisor, 1, java.math.RoundingMode.HALF_UP);
+        this.adjustedDays = this.adjustedHours.divide(divisor, 1, java.math.RoundingMode.HALF_UP);
 
-        this.originalAmount = this.originalDays.multiply(this.unitSellPrice)
-                                  .setScale(2, java.math.RoundingMode.HALF_UP);
-        this.adjustedAmount = this.adjustedDays.multiply(this.unitSellPrice)
-                                  .setScale(2, java.math.RoundingMode.HALF_UP);
+        if ("HOURLY".equals(this.priceUnit)) {
+            // HOURLY: unitSellPrice là giá/giờ → nhân trực tiếp với giờ
+            this.originalAmount = this.originalHours.multiply(this.unitSellPrice)
+                                      .setScale(2, java.math.RoundingMode.HALF_UP);
+            this.adjustedAmount = this.adjustedHours.multiply(this.unitSellPrice)
+                                      .setScale(2, java.math.RoundingMode.HALF_UP);
+        } else {
+            // DAILY / MONTHLY: unitSellPrice là giá/ngày → nhân với ngày
+            this.originalAmount = this.originalDays.multiply(this.unitSellPrice)
+                                      .setScale(2, java.math.RoundingMode.HALF_UP);
+            this.adjustedAmount = this.adjustedDays.multiply(this.unitSellPrice)
+                                      .setScale(2, java.math.RoundingMode.HALF_UP);
+        }
     }
 
     /**

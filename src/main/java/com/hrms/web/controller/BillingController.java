@@ -130,6 +130,7 @@ public class BillingController {
                 b.getDaysOff(),
                 b.getTotalWorkdays(),
                 b.getPriceUnit(),
+                b.getSellPriceUnit(),
                 b.getUnitCostPrice(),
                 b.getUnitSellPrice(),
                 b.getCostAmount(),

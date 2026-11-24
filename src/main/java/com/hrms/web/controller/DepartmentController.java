@@ -38,21 +38,21 @@ public class DepartmentController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<DepartmentResponse>> create(@Valid @RequestBody DepartmentRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.ok(departmentService.create(request, SecurityUtils.getCurrentCompanyId())));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<DepartmentResponse>> update(
             @PathVariable Long id, @Valid @RequestBody DepartmentRequest request) {
         return ResponseEntity.ok(ApiResponse.ok(departmentService.update(id, request, SecurityUtils.getCurrentCompanyId())));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
         departmentService.delete(id, SecurityUtils.getCurrentCompanyId());
         return ResponseEntity.ok(ApiResponse.ok(null, "Department deleted"));

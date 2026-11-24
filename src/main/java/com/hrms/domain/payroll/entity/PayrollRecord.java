@@ -26,6 +26,10 @@ public class PayrollRecord {
     @Column(name = "billing_record_id")
     private Long billingRecordId;
 
+    @Column(name = "source_statement_revision", nullable = false)
+    @Builder.Default
+    private long sourceStatementRevision = 0L;
+
     @Column(name = "payroll_month", nullable = false, length = 7)
     private String payrollMonth;
 
@@ -48,6 +52,10 @@ public class PayrollRecord {
     @Column(name = "calculated_salary", nullable = false, precision = 18, scale = 2)
     @Builder.Default
     private BigDecimal calculatedSalary = BigDecimal.ZERO;
+
+    @Column(name = "overtime_amount", nullable = false, precision = 18, scale = 2)
+    @Builder.Default
+    private BigDecimal overtimeAmount = BigDecimal.ZERO;
 
     @Column(name = "bonus", nullable = false, precision = 18, scale = 2)
     @Builder.Default
@@ -170,6 +178,7 @@ public class PayrollRecord {
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
         }
         this.netSalary = this.calculatedSalary
+                .add(this.overtimeAmount != null ? this.overtimeAmount : BigDecimal.ZERO)
                 .add(this.bonus)
                 .subtract(this.deduction)
                 .subtract(this.insuranceEmployeeAmount != null ? this.insuranceEmployeeAmount : BigDecimal.ZERO);

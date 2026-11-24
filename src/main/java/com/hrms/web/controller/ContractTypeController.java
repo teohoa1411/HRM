@@ -46,7 +46,7 @@ public class ContractTypeController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Create contract type")
     public ResponseEntity<ApiResponse<ContractTypeResponse>> create(
             @Valid @RequestBody ContractTypeRequest request) {
@@ -56,7 +56,7 @@ public class ContractTypeController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Update contract type")
     public ResponseEntity<ApiResponse<ContractTypeResponse>> update(
             @PathVariable Long id,
@@ -66,7 +66,7 @@ public class ContractTypeController {
     }
 
     @PatchMapping("/{id}/toggle")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Toggle active/inactive")
     public ResponseEntity<ApiResponse<Void>> toggle(@PathVariable Long id) {
         Long companyId = SecurityUtils.getCurrentCompanyId();

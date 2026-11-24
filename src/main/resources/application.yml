@@ -79,6 +79,7 @@ jwt:
 # MinIO (S3-compatible)
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  public-url: ${MINIO_PUBLIC_URL:}
   bucket-name: ${MINIO_BUCKET:hrms-documents}
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin123}
@@ -125,7 +126,7 @@ app:
   mail:
     enabled: ${MAIL_ENABLED:false}   # Set true khi đã config SMTP
   cors:
-    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:4200,http://localhost:4201}
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:4200,http://localhost:4201,http://localhost:60967,http://localhost:*}
 
 # Document Sync
 document-sync:

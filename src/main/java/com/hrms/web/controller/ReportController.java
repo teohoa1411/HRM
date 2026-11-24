@@ -26,7 +26,7 @@ public class ReportController {
     private final ReportService reportService;
 
     @GetMapping("/costs")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Cost summary report for a month range (YYYY-MM)")
     public ResponseEntity<ApiResponse<CostReportResponse>> getCostReport(
             @RequestParam String fromMonth,
@@ -36,7 +36,7 @@ public class ReportController {
     }
 
     @GetMapping("/revenue/by-job-role")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Revenue breakdown by job role")
     public ResponseEntity<ApiResponse<List<RevenueReportItem>>> getRevenueByJobRole(
             @RequestParam String fromMonth,
@@ -46,7 +46,7 @@ public class ReportController {
     }
 
     @GetMapping("/revenue/by-source-type")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Revenue breakdown by source type (INTERNAL vs VENDOR)")
     public ResponseEntity<ApiResponse<List<RevenueReportItem>>> getRevenueBySourceType(
             @RequestParam String fromMonth,
@@ -56,7 +56,7 @@ public class ReportController {
     }
 
     @GetMapping("/revenue/by-department")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Revenue breakdown by department")
     public ResponseEntity<ApiResponse<List<RevenueReportItem>>> getRevenueByDepartment(
             @RequestParam String fromMonth,
@@ -66,7 +66,7 @@ public class ReportController {
     }
 
     @GetMapping("/revenue/by-customer")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Revenue breakdown by customer")
     public ResponseEntity<ApiResponse<List<RevenueReportItem>>> getRevenueByCustomer(
             @RequestParam String fromMonth,
@@ -76,7 +76,7 @@ public class ReportController {
     }
 
     @GetMapping("/dashboard")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Dashboard summary: active employee count")
     public ResponseEntity<ApiResponse<Long>> getDashboardStats() {
         Long companyId = SecurityUtils.getCurrentCompanyId();

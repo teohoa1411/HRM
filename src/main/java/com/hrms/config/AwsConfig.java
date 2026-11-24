@@ -18,6 +18,10 @@ public class AwsConfig {
     @Value("${minio.endpoint}")
     private String endpoint;
 
+    /** URL công khai mà browser dùng để truy cập MinIO (khác với internal Docker hostname). */
+    @Value("${minio.public-url:}")
+    private String publicUrl;
+
     @Value("${minio.region}")
     private String region;
 
@@ -42,8 +46,11 @@ public class AwsConfig {
 
     @Bean
     public S3Presigner s3Presigner() {
+        // Dùng publicUrl để ký presigned URL → browser gửi đúng host mà chữ ký mong đợi.
+        // Nếu không có publicUrl thì fallback về endpoint (môi trường dev local).
+        String presignEndpoint = (publicUrl != null && !publicUrl.isBlank()) ? publicUrl : endpoint;
         return S3Presigner.builder()
-                .endpointOverride(URI.create(endpoint))
+                .endpointOverride(URI.create(presignEndpoint))
                 .region(Region.of(region))
                 .credentialsProvider(StaticCredentialsProvider.create(
                         AwsBasicCredentials.create(accessKey, secretKey)))

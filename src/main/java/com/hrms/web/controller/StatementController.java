@@ -55,15 +55,6 @@ public class StatementController {
                 statementService.generateCustomerStatement(SecurityUtils.getCurrentCompanyId(), customerId, yearMonth)));
     }
 
-    @PutMapping("/customer/{customerId}/{yearMonth}/line-items/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
-    public ResponseEntity<ApiResponse<StatementLineItemDto>> updateLineItem(
-            @PathVariable Long customerId, @PathVariable String yearMonth,
-            @PathVariable Long id, @RequestBody UpdateLineItemRequest req) {
-        return ResponseEntity.ok(ApiResponse.ok(
-                statementService.updateLineItem(SecurityUtils.getCurrentCompanyId(), id, req)));
-    }
-
     @GetMapping("/customer/{customerId}/{yearMonth}/export")
     @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
     public ResponseEntity<byte[]> exportCustomer(
@@ -141,7 +132,7 @@ public class StatementController {
     }
 
     @PostMapping("/customer/{customerId}/{yearMonth}/reopen")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Má»Ÿ láº¡i biÃªn báº£n KH â€” chá»‰ COMPANY_ADMIN")
     public ResponseEntity<ApiResponse<StatementDto>> reopenCustomer(
             @PathVariable Long customerId, @PathVariable String yearMonth,
@@ -297,7 +288,7 @@ public class StatementController {
     }
 
     @PostMapping("/vendor/{vendorId}/{yearMonth}/reopen")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Má»Ÿ láº¡i biÃªn báº£n Vendor â€” chá»‰ COMPANY_ADMIN")
     public ResponseEntity<ApiResponse<StatementDto>> reopenVendor(
             @PathVariable Long vendorId, @PathVariable String yearMonth,

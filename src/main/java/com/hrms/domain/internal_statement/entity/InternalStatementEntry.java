@@ -27,15 +27,34 @@ public class InternalStatementEntry {
     @Column(name = "work_date", nullable = false)
     private LocalDate workDate;
 
+    @Column(name = "expected_hours", nullable = false, precision = 4, scale = 1)
+    @Builder.Default
+    private BigDecimal expectedHours = BigDecimal.ZERO;
+
     /** Tổng giờ nhân sự log trong ngày (từ timesheet, tổng hợp tất cả project) */
     @Column(name = "raw_hours", nullable = false, precision = 4, scale = 1)
     @Builder.Default
     private BigDecimal rawHours = BigDecimal.ZERO;
 
+    @Column(name = "raw_ot_hours", nullable = false, precision = 4, scale = 1)
+    @Builder.Default
+    private BigDecimal rawOtHours = BigDecimal.ZERO;
+
     /** Giờ công HR điều chỉnh (mặc định = rawHours + giờ phép nếu có) */
     @Column(name = "adjusted_hours", nullable = false, precision = 4, scale = 1)
     @Builder.Default
     private BigDecimal adjustedHours = BigDecimal.ZERO;
+
+    @Column(name = "adjusted_ot_hours", nullable = false, precision = 4, scale = 1)
+    @Builder.Default
+    private BigDecimal adjustedOtHours = BigDecimal.ZERO;
+
+    @Column(name = "ot_multiplier", nullable = false, precision = 4, scale = 2)
+    @Builder.Default
+    private BigDecimal otMultiplier = BigDecimal.valueOf(1.5);
+
+    @Column(name = "ot_adjustment_reason", length = 500)
+    private String otAdjustmentReason;
 
     @Column(name = "is_leave_day", nullable = false)
     @Builder.Default

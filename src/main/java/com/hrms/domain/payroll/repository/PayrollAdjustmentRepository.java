@@ -11,5 +11,7 @@ public interface PayrollAdjustmentRepository extends JpaRepository<PayrollAdjust
 
     List<PayrollAdjustment> findByPayrollRecordIdOrderBySortOrderAsc(Long payrollRecordId);
 
+    List<PayrollAdjustment> findByPayrollRecordIdInOrderByPayrollRecordIdAscSortOrderAsc(List<Long> payrollRecordIds);
+
     void deleteByPayrollRecordId(Long payrollRecordId);
 }

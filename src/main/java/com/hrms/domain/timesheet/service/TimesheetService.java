@@ -5,6 +5,7 @@ import com.hrms.domain.common.exception.BusinessException;
 import com.hrms.domain.common.exception.NotFoundException;
 import com.hrms.domain.employee.repository.EmployeeRepository;
 import com.hrms.domain.payroll.repository.PayrollRecordRepository;
+import com.hrms.domain.internal_statement.repository.InternalStatementSummaryRepository;
 import com.hrms.domain.statement.entity.Statement;
 import com.hrms.domain.statement.entity.StatementHistory;
 import com.hrms.domain.statement.repository.StatementHistoryRepository;
@@ -44,6 +45,7 @@ public class TimesheetService {
     private final StatementRepository statementRepository;
     private final StatementHistoryRepository statementHistoryRepository;
     private final EmployeeRepository employeeRepository;
+    private final InternalStatementSummaryRepository internalStatementSummaryRepository;
 
     // ── Helpers ──────────────────────────────────────────
 
@@ -93,6 +95,14 @@ public class TimesheetService {
                     HttpStatus.FORBIDDEN, "TIMESHEET_ACCOUNTANT_CONFIRMED");
         }
 
+        Long employeeId = employeeRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .map(e -> e.getId()).orElse(null);
+        if (employeeId != null && internalStatementSummaryRepository
+                .findByCompanyIdAndEmployeeIdAndYearMonth(companyId, employeeId, yearMonth)
+                .map(s -> "CONFIRMED".equals(s.getStatus())).orElse(false)) {
+            throw new BusinessException("Biên bản nội bộ đã xác nhận; hãy mở lại trước khi sửa chấm công",
+                    HttpStatus.FORBIDDEN, "INTERNAL_STATEMENT_CONFIRMED");
+        }
         if (isAdmin) return;
 
         // Tầng 1: Period Lock
@@ -103,8 +113,6 @@ public class TimesheetService {
         }
 
         // Lookup employeeId từ userId
-        Long employeeId = employeeRepository.findByUserIdAndDeletedAtIsNull(userId)
-                .map(e -> e.getId()).orElse(null);
         if (employeeId == null) return;
 
         // Tầng 2: Payroll Lock — PayrollRecord đã CONFIRMED hoặc EXPORTED
@@ -466,7 +474,8 @@ public class TimesheetService {
      * Kế toán xác nhận timesheet (bước 2 sau khi HR khóa).
      * Điều kiện: tháng đã được HR khóa (locked = true).
      * Sau khi xác nhận: KHÔNG AI sửa được timesheet — kể cả COMPANY_ADMIN.
-     * Cho phép tạo biên bản khách hàng/vendor dựa trên timesheet này.
+     * Sau bước này mới cho phép tạo biên bản nội bộ và biên bản vendor.
+     * Biên bản khách hàng chỉ cần HR khóa timesheet.
      */
     @Transactional
     public TimesheetLockResponse confirmByAccountant(Long companyId, String yearMonth, Long accountantUserId) {

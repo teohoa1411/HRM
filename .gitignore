@@ -5,6 +5,7 @@ target/
 
 # Gradle
 .gradle/
+.gradle-tmp/
 gradle-app.setting
 !gradle/wrapper/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.properties

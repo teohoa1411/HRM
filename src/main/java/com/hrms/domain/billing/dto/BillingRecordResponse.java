@@ -27,6 +27,7 @@ public record BillingRecordResponse(
         BigDecimal daysOff,
         double totalWorkdays,
         PriceUnit priceUnit,
+        PriceUnit sellPriceUnit,
         BigDecimal unitCostPrice,
         BigDecimal unitSellPrice,
         BigDecimal costAmount,

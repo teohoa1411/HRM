@@ -50,7 +50,7 @@ public class UserController {
     }
 
     @PatchMapping("/{id}/toggle-status")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER') or hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN') or hasRole('SUPER_ADMIN')")
     @Operation(summary = "Enable/disable user account")
     public ResponseEntity<ApiResponse<Void>> toggleStatus(@PathVariable Long id) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
@@ -68,7 +68,7 @@ public class UserController {
     }
 
     @PatchMapping("/{id}/role")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER') or hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN') or hasRole('SUPER_ADMIN')")
     @Operation(summary = "Change user role")
     public ResponseEntity<ApiResponse<Void>> changeRole(@PathVariable Long id, @RequestBody java.util.Map<String, String> body) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
@@ -87,7 +87,7 @@ public class UserController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER') or hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN') or hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         userService.deleteUser(id, companyId);

@@ -33,7 +33,7 @@ public class FinancialReportController {
      * Tá»± Ä‘á»™ng gá»i sau billing/calculate vÃ  payroll/confirm.
      */
     @PostMapping("/generate/{yearMonth}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Tá»•ng há»£p láº¡i bÃ¡o cÃ¡o tÃ i chÃ­nh (force refresh)")
     public ResponseEntity<ApiResponse<Void>> generate(@PathVariable String yearMonth) {
         reportService.generateMonthlyFinancialRecords(SecurityUtils.getCurrentCompanyId(), yearMonth);
@@ -45,7 +45,7 @@ public class FinancialReportController {
      * Dá»¯ liá»‡u Ä‘Æ°á»£c chuáº©n bá»‹ sáºµn sau billing/calculate hoáº·c payroll/confirm.
      */
     @GetMapping("/monthly-summary")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Tá»•ng quan tÃ i chÃ­nh thÃ¡ng")
     public ResponseEntity<ApiResponse<MonthlySummaryDto>> monthlySummary(
             @RequestParam int month, @RequestParam int year) {
@@ -58,7 +58,7 @@ public class FinancialReportController {
      * BÃ¡o cÃ¡o per nhÃ¢n sá»± â€” Ä‘á»c tháº³ng tá»« DB.
      */
     @GetMapping("/per-employee")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "BÃ¡o cÃ¡o tÃ i chÃ­nh per nhÃ¢n sá»±")
     public ResponseEntity<ApiResponse<List<EmployeeFinancialDto>>> perEmployee(
             @RequestParam int month, @RequestParam int year) {
@@ -68,7 +68,7 @@ public class FinancialReportController {
     }
 
     @GetMapping("/per-customer")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Tá»•ng tiá»n tá»«ng khÃ¡ch hÃ ng pháº£i tráº£")
     public ResponseEntity<ApiResponse<List<MonthlyFinancialRecord>>> perCustomer(
             @RequestParam int month, @RequestParam int year) {
@@ -79,7 +79,7 @@ public class FinancialReportController {
     }
 
     @GetMapping("/per-vendor")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Tá»•ng tiá»n pháº£i tráº£ tá»«ng vendor")
     public ResponseEntity<ApiResponse<List<MonthlyFinancialRecord>>> perVendor(
             @RequestParam int month, @RequestParam int year,

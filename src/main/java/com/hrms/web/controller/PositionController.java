@@ -36,21 +36,21 @@ public class PositionController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<PositionResponse>> create(@Valid @RequestBody PositionRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.ok(positionService.create(request, SecurityUtils.getCurrentCompanyId())));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<PositionResponse>> update(
             @PathVariable Long id, @Valid @RequestBody PositionRequest request) {
         return ResponseEntity.ok(ApiResponse.ok(positionService.update(id, request, SecurityUtils.getCurrentCompanyId())));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
         positionService.delete(id, SecurityUtils.getCurrentCompanyId());
         return ResponseEntity.ok(ApiResponse.ok(null, "Position deleted"));

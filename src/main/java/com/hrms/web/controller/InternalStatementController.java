@@ -86,7 +86,7 @@ public class InternalStatementController {
 
     /** Confirm biÃªn báº£n cá»§a 1 nhÃ¢n sá»± */
     @PostMapping("/{yearMonth}/employee/{publicId}/confirm")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','ACCOUNTANT')")
     @Operation(summary = "XÃ¡c nháº­n biÃªn báº£n ná»™i bá»™ cá»§a 1 nhÃ¢n sá»±")
     public ResponseEntity<ApiResponse<Void>> confirmEmployee(
             @PathVariable String yearMonth, @PathVariable String publicId) {
@@ -99,7 +99,7 @@ public class InternalStatementController {
 
     /** Confirm táº¥t cáº£ */
     @PostMapping("/{yearMonth}/confirm-all")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','ACCOUNTANT')")
     @Operation(summary = "XÃ¡c nháº­n biÃªn báº£n ná»™i bá»™ táº¥t cáº£ nhÃ¢n sá»±")
     public ResponseEntity<ApiResponse<Void>> confirmAll(@PathVariable String yearMonth) {
         service.confirmAll(SecurityUtils.getCurrentCompanyId(), yearMonth, SecurityUtils.getCurrentUserId());
@@ -108,7 +108,7 @@ public class InternalStatementController {
 
     /** Unconfirm (má»Ÿ láº¡i DRAFT) */
     @PostMapping("/{yearMonth}/employee/{publicId}/unconfirm")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','ACCOUNTANT')")
     @Operation(summary = "Há»§y xÃ¡c nháº­n (vá» DRAFT)")
     public ResponseEntity<ApiResponse<Void>> unconfirmEmployee(
             @PathVariable String yearMonth, @PathVariable String publicId) {
@@ -119,6 +119,17 @@ public class InternalStatementController {
     }
 
     /** Export Excel toÃ n bá»™ thÃ¡ng */
+    @PostMapping("/{yearMonth}/employee/{publicId}/reopen")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','ACCOUNTANT')")
+    public ResponseEntity<ApiResponse<Void>> reopenEmployee(
+            @PathVariable String yearMonth, @PathVariable String publicId,
+            @RequestBody ReopenInternalStatementRequest req) {
+        Long companyId = SecurityUtils.getCurrentCompanyId();
+        Long employeeId = employeeService.resolveEmployeeId(publicId, companyId);
+        service.reopenEmployee(companyId, employeeId, yearMonth, req.reason());
+        return ResponseEntity.ok(ApiResponse.ok(null, "Reopened"));
+    }
+
     @GetMapping("/{yearMonth}/export")
     @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
     @Operation(summary = "Xuáº¥t Excel biÃªn báº£n ná»™i bá»™")
@@ -144,7 +155,7 @@ public class InternalStatementController {
     }
 
     @PostMapping("/{yearMonth}/reopen")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Má»Ÿ láº¡i biÃªn báº£n ná»™i bá»™ â€” chá»‰ COMPANY_ADMIN")
     public ResponseEntity<ApiResponse<Void>> reopenMonth(
             @PathVariable String yearMonth,

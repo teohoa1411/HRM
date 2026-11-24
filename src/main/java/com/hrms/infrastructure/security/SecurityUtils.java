@@ -32,7 +32,8 @@ public class SecurityUtils {
         return getCurrentRole() == Role.SUPER_ADMIN;
     }
 
-    public static boolean isCompanyAdmin() {
+    /** Returns true for either COMPANY_ADMIN or MANAGER. */
+    public static boolean isAdminOrManager() {
         Role role = getCurrentRole();
         return role == Role.COMPANY_ADMIN || role == Role.MANAGER;
     }

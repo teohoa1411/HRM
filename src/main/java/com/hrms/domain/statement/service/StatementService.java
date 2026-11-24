@@ -129,10 +129,6 @@ public class StatementService {
         }
     }
 
-    /**
-     * Bắt buộc: Timesheet tháng phải được Kế toán xác nhận trước khi tạo biên bản.
-     * Ngăn việc tạo/ cập nhật biên bản khi timesheet chưa được Kế toán chốt số liệu.
-     */
     private void assertNotClosed(Long companyId, String type, Long recipientId, String yearMonth) {
         statementRepository.findByCompanyIdAndStatementTypeAndRecipientIdAndStatementMonth(
                 companyId, type, recipientId, yearMonth)
@@ -145,6 +141,29 @@ public class StatementService {
                 });
     }
 
+    /**
+     * Biên bản khách hàng được lập sau khi HR khóa timesheet, không phụ thuộc
+     * vào bước Kế toán xác nhận. Đây là mốc chốt dữ liệu công để gửi khách hàng.
+     */
+    private void assertTimesheetLocked(Long companyId, String yearMonth) {
+        TimesheetPeriodLock lock = timesheetPeriodLockRepository
+                .findByCompanyIdAndYearMonth(companyId, yearMonth)
+                .orElseThrow(() -> new BusinessException(
+                        "Timesheet tháng " + yearMonth
+                                + " chưa được khóa. Vui lòng yêu cầu HR khóa timesheet trước khi tạo biên bản khách hàng.",
+                        HttpStatus.BAD_REQUEST, "TIMESHEET_NOT_LOCKED"));
+        if (!lock.isLocked()) {
+            throw new BusinessException(
+                    "Timesheet tháng " + yearMonth
+                            + " chưa được khóa. Vui lòng yêu cầu HR khóa timesheet trước khi tạo biên bản khách hàng.",
+                    HttpStatus.BAD_REQUEST, "TIMESHEET_NOT_LOCKED");
+        }
+    }
+
+    /**
+     * Bắt buộc: Timesheet tháng phải được Kế toán xác nhận trước khi tạo biên bản vendor.
+     * Ngăn việc tạo/ cập nhật biên bản khi timesheet chưa được Kế toán chốt số liệu.
+     */
     private void assertAccountantConfirmed(Long companyId, String yearMonth) {
         TimesheetPeriodLock lock = timesheetPeriodLockRepository
                 .findByCompanyIdAndYearMonth(companyId, yearMonth)
@@ -203,8 +222,8 @@ public class StatementService {
         // Chặn tái tạo khi biên bản đã đóng
         assertNotClosed(companyId, "CUSTOMER", customerId, yearMonth);
 
-        // Pre-check: Kế toán phải xác nhận timesheet trước khi tạo biên bản khách hàng.
-        assertAccountantConfirmed(companyId, yearMonth);
+        // Biên bản khách hàng chỉ cần timesheet đã khóa; chưa cần Kế toán xác nhận.
+        assertTimesheetLocked(companyId, yearMonth);
 
         // Auto-sync billing_records với employee_assignments mới nhất.
         // Đảm bảo NV được assign cho KH này (kể cả mid-month) sẽ có BillingRecord → lên biên bản.
@@ -299,10 +318,12 @@ public class StatementService {
                     .map(BillingRecord::getDaysWorked)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            // Lấy giá từ period đầu tiên (giá trong cùng customer cùng tháng thường nhất quán)
+            // Lấy giá và priceUnit từ period đầu tiên
             BillingRecord first = empBillings.get(0);
             BigDecimal price = "cost".equals(priceType) ? first.getUnitCostPrice() : first.getUnitSellPrice();
-            // Tham chiếu billing_record_id = period đầu (chỉ để truy vết)
+            String priceUnitStr = "cost".equals(priceType)
+                    ? (first.getPriceUnit() != null ? first.getPriceUnit().name() : "MONTHLY")
+                    : (first.getSellPriceUnit() != null ? first.getSellPriceUnit().name() : "MONTHLY");
             Long refBillingId = first.getId();
 
             StatementLineItem item = existingByEmp.get(empId);
@@ -311,12 +332,14 @@ public class StatementService {
                         .statement(statement).employeeId(empId)
                         .billingRecordId(refBillingId)
                         .originalDays(totalDays).adjustedDays(totalDays)
-                        .unitSellPrice(price).build();
+                        .unitSellPrice(price)
+                        .priceUnit(priceUnitStr).build();
                 item.initHoursFromDays();
                 statement.getLineItems().add(item);
             } else {
                 item.setOriginalDays(totalDays);
                 item.setUnitSellPrice(price);
+                item.setPriceUnit(priceUnitStr);
                 item.setBillingRecordId(refBillingId);
                 BigDecimal hpd = (item.getHoursPerDay() != null && item.getHoursPerDay().compareTo(BigDecimal.ZERO) > 0)
                         ? item.getHoursPerDay() : BigDecimal.valueOf(8.0);
@@ -522,8 +545,12 @@ public class StatementService {
         BigDecimal totalHours = dailies.stream()
                 .map(StatementLineItemDaily::getCustomerHours)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal adjustedDays = totalHours.divide(STD_HOURS, 2, RoundingMode.HALF_UP);
-        item.setAdjustedDays(adjustedDays);
+
+        // Lịch theo ngày là nguồn duy nhất để điều chỉnh giờ tính tiền khách hàng.
+        // Luôn đồng bộ tổng giờ này vào line item, bất kể đơn vị đơn giá.
+        item.setAdjustedHours(totalHours);
+        // recalculateAmounts() tính adjustedDays = adjustedHours/hoursPerDay
+        // và adjustedAmount theo đúng priceUnit (HOURLY: hours×price, DAILY/MONTHLY: days×price).
         item.recalculateAmounts();
         lineItemRepository.save(item);
 
@@ -1031,8 +1058,12 @@ public class StatementService {
                 // Hourly rate (same for all project rows of this employee)
                 BigDecimal hpd = item.getHoursPerDay() != null && item.getHoursPerDay().compareTo(BigDecimal.ZERO) > 0
                         ? item.getHoursPerDay() : BigDecimal.valueOf(8);
+                // HOURLY: unitSellPrice đã là giá/giờ → dùng trực tiếp
+                // DAILY/MONTHLY: unitSellPrice là giá/ngày → chia hpd để ra giá/giờ cho Excel
+                boolean isHourlyLine = "HOURLY".equals(item.getPriceUnit());
                 BigDecimal hourlyRate = item.getUnitSellPrice() != null
-                        ? item.getUnitSellPrice().divide(hpd, 0, RoundingMode.HALF_UP)
+                        ? (isHourlyLine ? item.getUnitSellPrice()
+                                        : item.getUnitSellPrice().divide(hpd, 0, RoundingMode.HALF_UP))
                         : BigDecimal.ZERO;
                 String onboardStr = emp != null && emp.getStartDate() != null
                         ? emp.getStartDate().format(ddMMyyyy) : "";
@@ -1121,7 +1152,7 @@ public class StatementService {
                     totalHCell.setCellStyle(numStyle);
 
                     XSSFCell mandayCell = (XSSFCell) row.createCell(C_MANDAY);
-                    mandayCell.setCellFormula(totalHRef + "/8");
+                    mandayCell.setCellFormula(totalHRef + "/" + hpd.toPlainString());
                     mandayCell.setCellStyle(numStyle);
 
                     setCell(row, C_RATE, hourlyRate.doubleValue(), amtStyle);
@@ -1187,8 +1218,10 @@ public class StatementService {
 
                 BigDecimal hpd = ot.item().getHoursPerDay() != null && ot.item().getHoursPerDay().compareTo(BigDecimal.ZERO) > 0
                         ? ot.item().getHoursPerDay() : BigDecimal.valueOf(8);
+                boolean isHourlyOt = "HOURLY".equals(ot.item().getPriceUnit());
                 BigDecimal baseRate = ot.item().getUnitSellPrice() != null
-                        ? ot.item().getUnitSellPrice().divide(hpd, 0, RoundingMode.HALF_UP)
+                        ? (isHourlyOt ? ot.item().getUnitSellPrice()
+                                      : ot.item().getUnitSellPrice().divide(hpd, 0, RoundingMode.HALF_UP))
                         : BigDecimal.ZERO;
                 // OT rate = 1.5 × hourly rate
                 BigDecimal otRate = baseRate.multiply(new BigDecimal("1.5")).setScale(0, RoundingMode.HALF_UP);
@@ -1236,7 +1269,7 @@ public class StatementService {
                 totalHCell.setCellStyle(numStyle);
 
                 XSSFCell mandayCell = (XSSFCell) row.createCell(C_MANDAY);
-                mandayCell.setCellFormula(totalHRef + "/8");
+                mandayCell.setCellFormula(totalHRef + "/" + hpd.toPlainString());
                 mandayCell.setCellStyle(numStyle);
 
                 setCell(row, C_RATE, otRate.doubleValue(), amtStyle);
@@ -1638,6 +1671,7 @@ public class StatementService {
                 null,
                 li.getOriginalDays(), li.getAdjustedDays(),
                 li.getOriginalHours(), li.getAdjustedHours(), li.getHoursPerDay(),
+                li.getPriceUnit() != null ? li.getPriceUnit() : "MONTHLY",
                 li.getUnitSellPrice(), li.getOriginalAmount(), li.getAdjustedAmount(),
                 li.getNote(),
                 periods != null ? periods : List.of(),

@@ -17,6 +17,7 @@ public record PayrollRecordDto(
         BigDecimal daysOff,
         BigDecimal totalWorkdays,
         BigDecimal calculatedSalary,
+        BigDecimal overtimeAmount,
         BigDecimal bonus,
         BigDecimal deduction,
         BigDecimal insuranceSalary,

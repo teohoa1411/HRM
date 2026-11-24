@@ -4,6 +4,8 @@ import com.hrms.domain.assignment.entity.EmployeeAssignment;
 import com.hrms.domain.assignment.repository.EmployeeAssignmentRepository;
 import com.hrms.domain.billing.entity.BillingRecord;
 import com.hrms.domain.billing.repository.BillingRecordRepository;
+import com.hrms.domain.payroll.entity.PayrollRecord;
+import com.hrms.domain.payroll.repository.PayrollRecordRepository;
 import com.hrms.domain.calendar.service.WorkCalendarService;
 import com.hrms.domain.common.enums.EmployeeSourceType;
 import com.hrms.domain.common.enums.PriceUnit;
@@ -26,8 +28,10 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -65,6 +69,7 @@ public class CostCalculationService {
     private final LeaveRequestRepository leaveRequestRepository;
     private final WorkCalendarService workCalendarService;
     private final BillingRecordRepository billingRecordRepository;
+    private final PayrollRecordRepository payrollRecordRepository;
 
     /**
      * Chạy tự động vào ngày 3 mỗi tháng lúc 02:00 để tính chi phí tháng trước.
@@ -128,11 +133,13 @@ public class CostCalculationService {
         // ─── 1. Lấy timesheet 1 lần cho cả tháng, group theo ngày ─────────────────
         Long userId = emp.getUserId();
         Set<LocalDate> workedDates = new HashSet<>();
+        Map<LocalDate, BigDecimal> hoursPerDate = new HashMap<>();
         if (userId != null) {
             List<Timesheet> entries = timesheetRepository.findByUserAndMonth(userId, companyId, monthStart, monthEnd);
             for (Timesheet t : entries) {
                 if (t.getHours() != null && t.getHours().compareTo(BigDecimal.ZERO) > 0) {
                     workedDates.add(t.getWorkDate());
+                    hoursPerDate.merge(t.getWorkDate(), t.getHours(), BigDecimal::add);
                 }
             }
         }
@@ -151,14 +158,46 @@ public class CostCalculationService {
 
         // ─── 4. Loop từng period → tạo BillingRecord ─────────────────────────────
         for (AssignmentPeriodSplitter.Period p : periods) {
-            createBillingRecordForPeriod(emp, companyId, yearMonth, p, workedDates,
+            createBillingRecordForPeriod(emp, companyId, yearMonth, p, workedDates, hoursPerDate,
                     monthStart, monthEnd, totalWorkdays);
         }
+    }
+
+    /** Customer/Vendor recalculation may refresh sell data, but must never overwrite a confirmed payroll cost. */
+    private void preserveConfirmedInternalPayrollCost(Employee employee, Long companyId, String yearMonth) {
+        if (employee.getSourceType() != EmployeeSourceType.INTERNAL) return;
+        PayrollRecord payroll = payrollRecordRepository
+                .findByCompanyIdAndEmployeeIdAndPayrollMonth(companyId, employee.getId(), yearMonth)
+                .orElse(null);
+        if (payroll == null || !("CONFIRMED".equals(payroll.getStatus())
+                || "EXPORTED".equals(payroll.getStatus()) || "PAID".equals(payroll.getStatus()))) return;
+
+        List<BillingRecord> records = billingRecordRepository
+                .findByCompanyAndEmployeeAndMonth(companyId, employee.getId(), yearMonth);
+        if (records.isEmpty()) return;
+        BigDecimal target = payroll.getCalculatedSalary()
+                .add(payroll.getOvertimeAmount() != null ? payroll.getOvertimeAmount() : BigDecimal.ZERO);
+        BigDecimal sourceTotal = records.stream().map(BillingRecord::getCostAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal assigned = BigDecimal.ZERO;
+        for (int i = 0; i < records.size(); i++) {
+            BillingRecord record = records.get(i);
+            BigDecimal amount = i == records.size() - 1 ? target.subtract(assigned)
+                    : (sourceTotal.signum() > 0
+                        ? target.multiply(record.getCostAmount()).divide(sourceTotal, 2, RoundingMode.HALF_UP)
+                        : target.divide(BigDecimal.valueOf(records.size()), 2, RoundingMode.HALF_UP));
+            record.setCostAmount(amount.max(BigDecimal.ZERO));
+            record.setCalcStatus("CONFIRMED_PAYROLL");
+            record.setCalcNote("Chi phí đồng bộ từ Payroll đã xác nhận");
+            assigned = assigned.add(amount);
+        }
+        billingRecordRepository.saveAll(records);
     }
 
     private void createBillingRecordForPeriod(Employee emp, Long companyId, String yearMonth,
                                               AssignmentPeriodSplitter.Period p,
                                               Set<LocalDate> workedDates,
+                                              Map<LocalDate, BigDecimal> hoursPerDate,
                                               LocalDate monthStart, LocalDate monthEnd,
                                               double totalWorkdaysOfMonth) {
         // ─── Đếm ngày công thực tế trong period ──────────────────────────────────
@@ -166,6 +205,12 @@ public class CostCalculationService {
                 .filter(d -> !d.isBefore(p.getStart()) && !d.isAfter(p.getEnd()))
                 .count();
         BigDecimal daysWorked = BigDecimal.valueOf(daysWorkedInPeriod);
+
+        // ─── Tổng giờ trong period (cho HOURLY billing) ───────────────────────────
+        BigDecimal hoursInPeriod = workedDates.stream()
+                .filter(d -> !d.isBefore(p.getStart()) && !d.isAfter(p.getEnd()))
+                .map(d -> hoursPerDate.getOrDefault(d, BigDecimal.ZERO))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         // ─── Phép trong period ───────────────────────────────────────────────────
         BigDecimal paidLeaveDays = leaveRequestRepository
@@ -212,16 +257,16 @@ public class CostCalculationService {
         BigDecimal costAmount;
         if (emp.getSourceType() == EmployeeSourceType.INTERNAL) {
             costAmount = calcInternalAmount(unitCostPrice, costPriceUnit, daysWorked, paidLeaveDays,
-                    unpaidLeaveDays, totalWorkdaysOfMonth, p.getStart(), p.getEnd(), monthStart, monthEnd);
+                    unpaidLeaveDays, hoursInPeriod, totalWorkdaysOfMonth, p.getStart(), p.getEnd(), monthStart, monthEnd);
         } else {
             costAmount = calcExternalAmount(unitCostPrice, costPriceUnit, daysWorked, unpaidLeaveDays,
-                    totalWorkdaysOfMonth, p.getStart(), p.getEnd(), monthStart, monthEnd);
+                    hoursInPeriod, totalWorkdaysOfMonth, p.getStart(), p.getEnd(), monthStart, monthEnd);
         }
 
         // Sell: chỉ có nếu period có customer, không bao gồm phép
         BigDecimal sellAmount = (customerId == null) ? BigDecimal.ZERO
                 : calcExternalAmount(unitSellPrice, sellPriceUnit, daysWorked, unpaidLeaveDays,
-                        totalWorkdaysOfMonth, p.getStart(), p.getEnd(), monthStart, monthEnd);
+                        hoursInPeriod, totalWorkdaysOfMonth, p.getStart(), p.getEnd(), monthStart, monthEnd);
 
         // ─── Insert (đã xoá record cũ ở processEmployee) ─────────────────────────
         BillingRecord record = BillingRecord.builder()
@@ -240,6 +285,7 @@ public class CostCalculationService {
                 .unpaidLeaveDays(unpaidLeaveDays)
                 .totalWorkdays(totalWorkdaysOfMonth)
                 .priceUnit(costPriceUnit)
+                .sellPriceUnit(sellPriceUnit)
                 .unitCostPrice(unitCostPrice)
                 .unitSellPrice(unitSellPrice)
                 .costAmount(costAmount)
@@ -270,10 +316,15 @@ public class CostCalculationService {
      */
     private BigDecimal calcInternalAmount(BigDecimal unitPrice, PriceUnit priceUnit,
                                            BigDecimal daysWorked, BigDecimal paidLeaveDays,
-                                           BigDecimal unpaidLeaveDays, double totalWorkdaysOfMonth,
+                                           BigDecimal unpaidLeaveDays, BigDecimal hoursInPeriod,
+                                           double totalWorkdaysOfMonth,
                                            LocalDate periodStart, LocalDate periodEnd,
                                            LocalDate monthStart, LocalDate monthEnd) {
         if (unitPrice == null || unitPrice.compareTo(BigDecimal.ZERO) == 0) return BigDecimal.ZERO;
+
+        if (priceUnit == PriceUnit.HOURLY) {
+            return unitPrice.multiply(hoursInPeriod).setScale(2, RoundingMode.HALF_UP);
+        }
 
         if (priceUnit == PriceUnit.DAILY) {
             BigDecimal effectiveDays = daysWorked.add(paidLeaveDays);
@@ -302,10 +353,15 @@ public class CostCalculationService {
      */
     private BigDecimal calcExternalAmount(BigDecimal unitPrice, PriceUnit priceUnit,
                                            BigDecimal daysWorked, BigDecimal unpaidLeaveDays,
+                                           BigDecimal hoursInPeriod,
                                            double totalWorkdaysOfMonth,
                                            LocalDate periodStart, LocalDate periodEnd,
                                            LocalDate monthStart, LocalDate monthEnd) {
         if (unitPrice == null || unitPrice.compareTo(BigDecimal.ZERO) == 0) return BigDecimal.ZERO;
+
+        if (priceUnit == PriceUnit.HOURLY) {
+            return unitPrice.multiply(hoursInPeriod).setScale(2, RoundingMode.HALF_UP);
+        }
 
         if (priceUnit == PriceUnit.DAILY) {
             return unitPrice.multiply(daysWorked).setScale(2, RoundingMode.HALF_UP);

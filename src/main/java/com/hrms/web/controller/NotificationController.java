@@ -25,7 +25,7 @@ public class NotificationController {
     private final NotificationSettingService settingService;
     private final InsuranceAlertScheduler alertScheduler;
 
-    /** Xem lá»‹ch sá»­ gá»­i email */
+    /** Xem lịch sử gửi email */
     @GetMapping("/logs")
     public ResponseEntity<ApiResponse<List<NotificationLogDto>>> getLogs() {
         Long companyId = SecurityUtils.getCurrentCompanyId();
@@ -34,32 +34,32 @@ public class NotificationController {
         return ResponseEntity.ok(ApiResponse.ok(logs));
     }
 
-    /** Xem cáº¥u hÃ¬nh notification */
+    /** Xem cấu hình notification */
     @GetMapping("/settings")
     public ResponseEntity<ApiResponse<List<NotificationSettingDto>>> getSettings() {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(settingService.getSettings(companyId)));
     }
 
-    /** Cáº­p nháº­t cáº¥u hÃ¬nh notification */
+    /** Cập nhật cấu hình notification — chỉ COMPANY_ADMIN */
     @PutMapping("/settings")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<NotificationSettingDto>> updateSetting(
             @RequestBody NotificationSettingDto dto) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(settingService.upsert(companyId, dto)));
     }
 
-    /** Seed default settings */
+    /** Seed default settings — chỉ COMPANY_ADMIN */
     @PostMapping("/settings/seed")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<String>> seedDefaults() {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         settingService.seedDefaults(companyId);
         return ResponseEntity.ok(ApiResponse.ok("Notification settings seeded"));
     }
 
-    /** Trigger thá»§ cÃ´ng kiá»ƒm tra BH (admin/debug) */
+    /** Trigger thủ công kiểm tra BH (admin/debug) */
     @PostMapping("/trigger-insurance-check")
     @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
     public ResponseEntity<ApiResponse<String>> triggerInsuranceCheck() {

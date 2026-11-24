@@ -85,10 +85,17 @@ public class BillingRecord {
     @Builder.Default
     private double totalWorkdays = 22;
 
+    /** Đơn vị tính cho cost (vendor/internal salary). */
     @Enumerated(EnumType.STRING)
     @Column(name = "price_unit", nullable = false, length = 10)
     @Builder.Default
     private PriceUnit priceUnit = PriceUnit.MONTHLY;
+
+    /** Đơn vị tính cho sell (customer price). Có thể khác cost unit. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "sell_price_unit", nullable = false, length = 10)
+    @Builder.Default
+    private PriceUnit sellPriceUnit = PriceUnit.MONTHLY;
 
     @Column(name = "unit_cost_price", nullable = false, precision = 18, scale = 2)
     @Builder.Default

@@ -48,7 +48,7 @@ public class LeaveController {
     }
 
     @PostMapping("/types")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Create leave type")
     public ResponseEntity<ApiResponse<LeaveTypeResponse>> createType(
             @Valid @RequestBody LeaveTypeRequest request) {
@@ -58,7 +58,7 @@ public class LeaveController {
     }
 
     @PutMapping("/types/{id}")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     @Operation(summary = "Update leave type")
     public ResponseEntity<ApiResponse<LeaveTypeResponse>> updateType(
             @PathVariable Long id, @Valid @RequestBody LeaveTypeRequest request) {
@@ -198,5 +198,17 @@ public class LeaveController {
         java.math.BigDecimal quota = new java.math.BigDecimal(body.get("totalQuota").toString());
         return ResponseEntity.ok(ApiResponse.ok(
                 leaveService.grantLeaveBalance(companyId, employeeId, leaveTypeId, year, quota)));
+    }
+
+    @PatchMapping("/balances/{id}/adjust")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @Operation(summary = "Điều chỉnh delta quota nghỉ phép (cộng/trừ ngày)")
+    public ResponseEntity<ApiResponse<LeaveBalanceResponse>> adjustLeaveBalance(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body) {
+        Long companyId = SecurityUtils.getCurrentCompanyId();
+        java.math.BigDecimal delta = new java.math.BigDecimal(body.get("delta").toString());
+        return ResponseEntity.ok(ApiResponse.ok(
+                leaveService.adjustLeaveBalance(companyId, id, delta)));
     }
 }

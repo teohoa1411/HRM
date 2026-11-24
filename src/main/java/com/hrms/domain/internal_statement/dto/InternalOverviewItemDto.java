@@ -4,10 +4,12 @@ import java.math.BigDecimal;
 
 public record InternalOverviewItemDto(
         Long employeeId,
+        String employeePublicId,
         String employeeCode,
         String fullName,
         BigDecimal totalRawHours,
         BigDecimal totalAdjustedHours,
+        BigDecimal totalAdjustedOtHours,
         BigDecimal totalAdjustedDays,
         int totalLeaveDays,
         int totalHalfLeaveDays,

@@ -16,24 +16,29 @@ import java.util.List;
 @RestController
 @RequestMapping("/v1/insurance/config")
 @RequiredArgsConstructor
-@PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
 public class InsuranceConfigController {
 
     private final InsuranceService insuranceService;
 
+    /** MANAGER được xem cấu hình để biết tỷ lệ đang áp dụng */
     @GetMapping
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
     public ResponseEntity<ApiResponse<List<InsuranceConfigResponse>>> getAll() {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(insuranceService.getConfigs(companyId)));
     }
 
+    /** MANAGER được xem cấu hình active */
     @GetMapping("/active")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
     public ResponseEntity<ApiResponse<List<InsuranceConfigResponse>>> getActive() {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(insuranceService.getActiveConfigs(companyId)));
     }
 
+    /** Chỉ COMPANY_ADMIN được tạo/sửa/seed cấu hình tỷ lệ */
     @PostMapping
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<InsuranceConfigResponse>> create(
             @Valid @RequestBody InsuranceConfigRequest request) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
@@ -41,14 +46,15 @@ public class InsuranceConfigController {
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<InsuranceConfigResponse>> update(
             @PathVariable Long id, @Valid @RequestBody InsuranceConfigRequest request) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         return ResponseEntity.ok(ApiResponse.ok(insuranceService.updateConfig(id, companyId, request)));
     }
 
-    /** Seed config máº·c Ä‘á»‹nh cho company */
     @PostMapping("/seed")
+    @PreAuthorize("hasRole('COMPANY_ADMIN')")
     public ResponseEntity<ApiResponse<String>> seedDefault() {
         Long companyId = SecurityUtils.getCurrentCompanyId();
         insuranceService.seedDefaultConfig(companyId);

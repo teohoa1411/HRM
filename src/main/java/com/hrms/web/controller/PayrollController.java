@@ -2,6 +2,7 @@ package com.hrms.web.controller;
 
 import com.hrms.domain.payroll.dto.PayrollAdjustmentDto;
 import com.hrms.domain.payroll.dto.PayrollRecordDto;
+import com.hrms.domain.payroll.dto.PayrollReadinessDto;
 import com.hrms.domain.payroll.dto.UpdatePayrollRequest;
 import com.hrms.domain.payroll.entity.PayrollRecordHistory;
 import com.hrms.domain.payroll.repository.PayrollRecordHistoryRepository;
@@ -47,6 +48,12 @@ public class PayrollController {
         return ResponseEntity.ok(ApiResponse.ok(payrollService.getPayroll(companyId, yearMonth)));
     }
 
+    @GetMapping("/{yearMonth}/readiness")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    public ResponseEntity<ApiResponse<PayrollReadinessDto>> readiness(@PathVariable String yearMonth) {
+        return ResponseEntity.ok(ApiResponse.ok(payrollService.getReadiness(SecurityUtils.getCurrentCompanyId(), yearMonth)));
+    }
+
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
     @Operation(summary = "Cáº­p nháº­t bonus, deduction, ghi chÃº")
@@ -57,7 +64,7 @@ public class PayrollController {
     }
 
     @PostMapping("/{yearMonth}/confirm")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER','ACCOUNTANT')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','ACCOUNTANT')")
     @Operation(summary = "XÃ¡c nháº­n toÃ n bá»™ báº£ng lÆ°Æ¡ng thÃ¡ng")
     public ResponseEntity<ApiResponse<Void>> confirm(@PathVariable String yearMonth) {
         Long companyId = SecurityUtils.getCurrentCompanyId();
@@ -79,7 +86,7 @@ public class PayrollController {
     }
 
     @PostMapping("/{yearMonth}/reset")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','ACCOUNTANT')")
     @Operation(summary = "Reset báº£ng lÆ°Æ¡ng vá» DRAFT, lÆ°u lá»‹ch sá»­")
     public ResponseEntity<ApiResponse<Void>> reset(
             @PathVariable String yearMonth,
@@ -90,7 +97,7 @@ public class PayrollController {
     }
 
     @PostMapping("/{yearMonth}/mark-paid")
-    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyRole('COMPANY_ADMIN','ACCOUNTANT')")
     @Operation(summary = "Mark payroll as PAID (locks permanently)")
     public ResponseEntity<ApiResponse<Void>> markPaid(@PathVariable String yearMonth) {
         Long companyId = SecurityUtils.getCurrentCompanyId();

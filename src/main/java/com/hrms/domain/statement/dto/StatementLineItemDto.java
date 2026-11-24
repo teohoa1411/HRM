@@ -19,6 +19,8 @@ public record StatementLineItemDto(
         BigDecimal adjustedHours,
         /** Số giờ/ngày để quy đổi (mặc định 8.0) */
         BigDecimal hoursPerDay,
+        /** Đơn vị tính: HOURLY | DAILY | MONTHLY — FE dùng để hiển thị giờ/ngày đúng */
+        String priceUnit,
         BigDecimal unitSellPrice,
         BigDecimal originalAmount,
         BigDecimal adjustedAmount,

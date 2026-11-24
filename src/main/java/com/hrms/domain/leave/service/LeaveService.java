@@ -530,6 +530,34 @@ public class LeaveService {
                 balance.getCarriedOver(), balance.getRemainingDays());
     }
 
+    @Transactional
+    public LeaveBalanceResponse adjustLeaveBalance(Long companyId, Long balanceId, java.math.BigDecimal delta) {
+        LeaveBalance balance = balanceRepo.findById(balanceId)
+                .filter(b -> b.getCompanyId().equals(companyId))
+                .orElseThrow(() -> new NotFoundException("LeaveBalance", balanceId));
+
+        java.math.BigDecimal newQuota = balance.getTotalQuota().add(delta).max(java.math.BigDecimal.ZERO);
+
+        // Guard: không để quota < usedDays → tránh remainingDays âm vĩnh viễn
+        if (newQuota.compareTo(balance.getUsedDays()) < 0) {
+            throw new BusinessException(
+                "Không thể giảm quota xuống " + newQuota + " ngày vì nhân sự đã sử dụng "
+                + balance.getUsedDays() + " ngày. Quota tối thiểu có thể đặt là " + balance.getUsedDays() + " ngày.");
+        }
+
+        balance.setTotalQuota(newQuota);
+        balance = balanceRepo.save(balance);
+
+        Employee emp = employeeRepo.findById(balance.getEmployeeId()).orElseThrow();
+        LeaveType lt = typeRepo.findById(balance.getLeaveTypeId()).orElseThrow();
+        return new LeaveBalanceResponse(
+                balance.getId(), balance.getEmployeeId(),
+                emp.getFullName(), emp.getEmployeeCode(),
+                balance.getLeaveTypeId(), lt.getName(), lt.getCode(), lt.isPaid(),
+                balance.getYear(), balance.getTotalQuota(), balance.getUsedDays(),
+                balance.getCarriedOver(), balance.getRemainingDays());
+    }
+
     // ══════════════════════════════════════════════════════════════
     // Private helpers
     // ══════════════════════════════════════════════════════════════
